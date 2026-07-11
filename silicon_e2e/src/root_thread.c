@@ -278,13 +278,21 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 
 	board_console_puts("SILICON_E2E: begin\n");
 
+	board_console_puts("> thread\n");
 	test_thread_api();
+	board_console_puts("> ipc\n");
 	test_ipc();
+	board_console_puts("> recv_or_notif\n");
 	test_recv_or_notif();
+	board_console_puts("> notif\n");
 	test_notif();
+	board_console_puts("> memory\n");
 	test_memory();
+	board_console_puts("> heap\n");
 	test_heap();
+	board_console_puts("> irq\n");
 	test_irq();
+	board_console_puts("> caps\n");
 	test_capabilities();
 
 	board_console_puts("SILICON_E2E: ");

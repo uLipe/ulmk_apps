@@ -539,16 +539,22 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 
 	board_console_puts("SILICON_STRESS: begin\n");
 
+	board_console_puts("> timer\n");
 	bench_timer();
 	ulmk_board_hil_mark(4u);
+	board_console_puts("> syscalls\n");
 	bench_syscalls();
 	ulmk_board_hil_mark(6u);
+	board_console_puts("> heap\n");
 	bench_heap();
 	ulmk_board_hil_mark(8u);
+	board_console_puts("> ctx_switch\n");
 	bench_ctx_switch();
 	ulmk_board_hil_mark(5u);
+	board_console_puts("> ipc\n");
 	bench_ipc();
 	ulmk_board_hil_mark(7u);
+	board_console_puts("> isolation\n");
 	bench_isolation();
 	ulmk_board_hil_mark(9u);
 

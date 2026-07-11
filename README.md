@@ -9,8 +9,15 @@ container as `/ulmk_apps`).
 | Component | Role |
 |-----------|------|
 | [`silicon_baseline`](silicon_baseline/) | Bring-up: `root_thread` + console hello |
-| [`silicon_e2e`](silicon_e2e/) | Public API correctness (`SILICON_E2E: PASS`) |
-| [`silicon_stress`](silicon_stress/) | Perf / isolation / footprint (`SILICON_STRESS: PASS` + REPORT) |
+| [`silicon_e2e`](silicon_e2e/) | Public API smoke (`SILICON_E2E: PASS`) |
+| [`silicon_unit`](silicon_unit/) | Per-syscall happy / edge / crash hardening |
+| [`silicon_stress`](silicon_stress/) | Perf / isolation / footprint (`SILICON_STRESS: PASS`) |
+| [`silicon_wcet`](silicon_wcet/) | Per-syscall WCET + O(1) ±10% (`SILICON_WCET: PASS`) |
+
+Run order: baseline → e2e → unit → stress → wcet.
+
+All certs print short `> section` progress markers before the final
+PASS/FAIL line (fits the 2048-byte RAM console log).
 
 ### Board contract
 
@@ -23,14 +30,29 @@ The BSP must provide:
 
 Any board that meets this contract can run the same cert components.
 
+### `silicon_unit`
+
+Happy path, edge cases, and crash-hardening probes for public syscalls
+(thread / ipc / notif / mem / heap / irq / cap).  Invalid handles must
+return errors without `trap_panic`.  Report: `pass=N fail=M` then
+`SILICON_UNIT: PASS|FAIL`.
+
+### `silicon_wcet` report
+
+Times every public userspace syscall in STM ticks (`FSTM_HZ`).  Each line is
+`name min/avg/max o1=0|1`.  `o1=1` means min/max stay within ±10% of avg
+(2-tick floor).  `mem_map_size_o1` also checks 64/256/1024-byte maps.  `thread_exit`
+is `skip=noreturn`.  On TriCore silicon, `irq_bind` is sampled once (dynamic SRC
+slot walk Class-4s on real TC275).
+
 ### Build / HIL (TC275 Lite)
 
 ```bash
 # from ulmk/
 python3 tools/dev.py build --board ../ulmk_boards/tc275_lite \
-  --no-components --component silicon_stress
+  --no-components --component silicon_unit
 
-bash ../ulmk_boards/tc275_lite/scripts/hil-silicon-stress.sh \
+bash ../ulmk_boards/tc275_lite/scripts/hil-silicon-unit.sh \
   ../build/ulipe-tricore-tc275_lite/ulmk
 ```
 

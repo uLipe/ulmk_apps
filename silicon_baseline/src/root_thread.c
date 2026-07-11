@@ -31,6 +31,10 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	board_console_start(info);
 	ulmk_board_hil_mark(2u);
 
+	board_console_puts("SILICON_BASELINE: begin\n");
+	board_console_puts("> console\n");
+	board_console_puts("> spawn_hello\n");
+
 	attr.name       = "hello";
 	attr.entry      = hello_entry;
 	attr.arg        = NULL;
@@ -41,5 +45,6 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	tid = ulmk_thread_create(&attr);
 	(void)tid;
 
+	board_console_puts("SILICON_BASELINE: PASS\n");
 	ulmk_thread_exit();
 }
