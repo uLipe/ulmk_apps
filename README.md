@@ -13,11 +13,10 @@ container as `/ulmk_apps`).
 | [`silicon_unit`](silicon_unit/) | Per-syscall happy / edge / crash hardening |
 | [`silicon_stress`](silicon_stress/) | Perf / isolation / footprint (`SILICON_STRESS: PASS`) |
 | [`silicon_wcet`](silicon_wcet/) | Per-syscall WCET + O(1) ±10% (`SILICON_WCET: PASS`) |
+| [`board_leds`](board_leds/) | Thin link to BSP LED API |
+| [`board_blinky`](board_blinky/) | LED blink @ 1 Hz + serial shell (`BOARD_BLINKY: PASS`) |
 
-Run order: baseline → e2e → unit → stress → wcet.
-
-All certs print short `> section` progress markers before the final
-PASS/FAIL line (fits the 2048-byte RAM console log).
+Run order: baseline → e2e → unit → stress → wcet.  `board_blinky` exercises the BSP.
 
 ### Board contract
 
