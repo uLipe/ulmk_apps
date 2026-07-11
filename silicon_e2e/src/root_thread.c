@@ -16,6 +16,7 @@ ulmk_tid_t board_console_start(const ulmk_boot_info_t *info);
 void board_console_putc(char c);
 void board_console_puts(const char *s);
 void ulmk_board_hil_mark(uint32_t n);
+void board_services_init(const ulmk_boot_info_t *info);
 
 /*
  * Statics must live in the component domain (user RAM).  Plain .data/.bss
@@ -272,9 +273,8 @@ static void __attribute__((noinline)) silicon_e2e_done(void)
 void ulmk_root_thread(const ulmk_boot_info_t *info)
 {
 	ulmk_board_hil_mark(1u);
-	/* Console only — board_timer_start still traps Class 4 on TC275 HIL. */
-	board_console_start(info);
-	ulmk_board_hil_mark(2u);
+	board_services_init(info);
+	ulmk_board_hil_mark(3u);
 
 	board_console_puts("SILICON_E2E: begin\n");
 
