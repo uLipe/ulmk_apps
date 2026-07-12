@@ -22,7 +22,7 @@ int board_leds_get(uint32_t led, int *on);
 #define BOARD_LED_2	1u
 
 #define SHELL_LINE_MAX	32u
-#define TICK_US		1000000u
+#define TICK_US		100000u
 #define POLL_SLICE_US	50000u
 
 static ULMK_PRIVATE char g_line[SHELL_LINE_MAX];
