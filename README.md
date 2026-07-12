@@ -14,9 +14,9 @@ container as `/ulmk_apps`).
 | [`silicon_stress`](silicon_stress/) | Perf / isolation / footprint (`SILICON_STRESS: PASS`) |
 | [`silicon_wcet`](silicon_wcet/) | Per-syscall WCET + O(1) ±10% (`SILICON_WCET: PASS`) |
 | [`board_leds`](board_leds/) | Thin link to BSP LED API |
-| [`board_blinky`](board_blinky/) | LED blink @ 1 Hz + serial shell (`BOARD_BLINKY: PASS`) |
+| [`board_blinky`](board_blinky/) | LED blink @ 1 Hz + serial shell (demo app) |
 
-Run order: baseline → e2e → unit → stress → wcet.  `board_blinky` exercises the BSP.
+Run order for silicon certs: baseline → e2e → unit → stress → wcet.
 
 ### Board contract
 
