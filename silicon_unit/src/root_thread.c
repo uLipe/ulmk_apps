@@ -402,10 +402,14 @@ static void test_irq_edge(void)
 	progress("irq/edge");
 	CHECK("bind_hw0",
 	      ulmk_irq_bind_hw(5u, n, 0u, 0u) == ULMK_EINVAL);
+	/*
+	 * Use a high SRPN never claimed by board drivers (tc275: 2–7,9
+	 * are STM/ASCLIN/ADC/CAN/I2C/GPIO; 8 reserved by irq_stress).
+	 */
 	CHECK("en_unbound",
-	      ulmk_irq_enable(9u) != ULMK_OK);
+	      ulmk_irq_enable(200u) != ULMK_OK);
 	CHECK("ack_unbound",
-	      ulmk_irq_ack(9u) != ULMK_OK);
+	      ulmk_irq_ack(200u) != ULMK_OK);
 	ulmk_notif_destroy(n);
 }
 
