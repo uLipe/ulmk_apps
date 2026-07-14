@@ -40,11 +40,12 @@ return errors without `trap_panic`.  Report: `pass=N fail=M` then
 
 ### `silicon_wcet` report
 
-Times every public userspace syscall in STM ticks (`FSTM_HZ`).  Each line is
-`name min/avg/max o1=0|1`.  `o1=1` means min/max stay within ±10% of avg
-(2-tick floor).  `mem_map_size_o1` also checks 64/256/1024-byte maps.  `thread_exit`
-is `skip=noreturn`.  On TriCore silicon, `irq_bind` is sampled once (dynamic SRC
-slot walk Class-4s on real TC275).
+Times every public userspace syscall in CPU cycles (CCNT / `slot=kern_pure`).
+Each sample is wall-clock gateway time minus voluntary context-switch RTT
+(`blocked`).  Lines are `name min/avg/max [blk=avg] o1=0|1`.  `o1=1` means
+min/max stay within ±10% of avg (2-cycle floor).  `mem_map_size_o1` also checks
+64/256/1024-byte maps.  `thread_exit` is `skip=noreturn`.  On TriCore silicon,
+`irq_bind` is sampled once (dynamic SRC slot walk Class-4s on real TC275).
 
 ### Build / HIL (TC275 Lite)
 

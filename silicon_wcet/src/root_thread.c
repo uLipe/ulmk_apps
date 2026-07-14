@@ -3,9 +3,12 @@
  * silicon_wcet — public syscall WCET / O(1) audit on silicon (ulmk_apps).
  *
  * Requires ULMK_CONFIG_SYSCALL_WCET=1.  Each sample is the kernel-side
- * CCNT delta recorded around ulmk_kern_trap_syscall (CPU cycles, not STM).
+ * pure CCNT delta (wall minus blocked RTT) around ulmk_kern_trap_syscall.
  * o1=1 iff min/max stay within ±10% of avg (2-cycle floor).
  * mem_map also checked across sizes 64/256/1024.
+ *
+ * Rows print min/avg/max for pure delta; blocking syscalls also print
+ * blk=avg_blocked when the blocked bucket is non-zero.
  *
  * Peers that must run once use equal prio, set a flag, then park on a notif
  * (never yield-spin at prio 0 — that starves the console ep_call server).
@@ -80,7 +83,7 @@ static int o1_ok(uint32_t mn, uint32_t avg, uint32_t mx)
 }
 
 static void emit_row(const char *name, uint32_t mn, uint32_t avg, uint32_t mx,
-		     int ok)
+		     uint32_t blk_avg, int ok)
 {
 	board_console_puts(name);
 	board_console_putc(' ');
@@ -89,6 +92,10 @@ static void emit_row(const char *name, uint32_t mn, uint32_t avg, uint32_t mx,
 	put_u32(avg);
 	board_console_putc('/');
 	put_u32(mx);
+	if (blk_avg != 0u) {
+		board_console_puts(" blk=");
+		put_u32(blk_avg);
+	}
 	board_console_puts(" o1=");
 	board_console_putc(ok ? '1' : '0');
 	board_console_putc('\n');
@@ -98,13 +105,19 @@ static void emit_row(const char *name, uint32_t mn, uint32_t avg, uint32_t mx,
 
 static void record(const char *name, uint32_t mn, uint32_t avg, uint32_t mx)
 {
-	emit_row(name, mn, avg, mx, o1_ok(mn, avg, mx));
+	emit_row(name, mn, avg, mx, 0u, o1_ok(mn, avg, mx));
+}
+
+static void record_blk(const char *name, uint32_t mn, uint32_t avg, uint32_t mx,
+		       uint32_t blk_avg)
+{
+	emit_row(name, mn, avg, mx, blk_avg, o1_ok(mn, avg, mx));
 }
 
 static void record_custom(const char *name, uint32_t mn, uint32_t avg,
 			  uint32_t mx, int ok)
 {
-	emit_row(name, mn, avg, mx, ok ? 1 : 0);
+	emit_row(name, mn, avg, mx, 0u, ok ? 1 : 0);
 }
 
 static void stats_from_samples(const uint32_t *s, uint32_t n,
@@ -135,10 +148,20 @@ static uint32_t slot_delta_after(uint32_t seq_before)
 	return g_ulmk_syscall_wcet.delta;
 }
 
+static uint32_t slot_blocked_after(uint32_t seq_before)
+{
+	if (g_ulmk_syscall_wcet.magic != ULMK_SYSCALL_WCET_MAGIC)
+		return 0u;
+	if (g_ulmk_syscall_wcet.seq == seq_before)
+		return 0u;
+	return g_ulmk_syscall_wcet.blocked;
+}
+
 static void sample_void_fn(void (*fn)(void), const char *name)
 {
 	uint32_t samples[WCET_SAMPLES];
-	uint32_t i, seq, mn, avg, mx;
+	uint32_t blocked[WCET_SAMPLES];
+	uint32_t i, seq, mn, avg, mx, bmn, bavg, bmx;
 
 	for (i = 0u; i < WCET_WARMUP; i++)
 		fn();
@@ -146,9 +169,16 @@ static void sample_void_fn(void (*fn)(void), const char *name)
 		seq = g_ulmk_syscall_wcet.seq;
 		fn();
 		samples[i] = slot_delta_after(seq);
+		blocked[i] = slot_blocked_after(seq);
 	}
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
-	record(name, mn, avg, mx);
+	stats_from_samples(blocked, WCET_SAMPLES, &bmn, &bavg, &bmx);
+	(void)bmn;
+	(void)bmx;
+	if (bavg != 0u)
+		record_blk(name, mn, avg, mx, bavg);
+	else
+		record(name, mn, avg, mx);
 }
 
 static void wrap_self(void)
@@ -362,7 +392,7 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 		ulmk_thread_exit();
 	}
 	board_console_puts("SILICON_WCET: REPORT\n");
-	board_console_puts("unit=cpu_cycles slot=kern\n");
+	board_console_puts("unit=cpu_cycles slot=kern_pure\n");
 	board_console_puts("n=");
 	put_u32(WCET_SAMPLES);
 	board_console_puts(" tol%=");
@@ -492,14 +522,23 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 
 	m.label = 0x100u;
 	(void)ulmk_ep_call(g_ipc_ep, &m);
-	for (i = 0u; i < WCET_SAMPLES; i++) {
-		m.label = 0x100u;
-		seq = g_ulmk_syscall_wcet.seq;
-		(void)ulmk_ep_call(g_ipc_ep, &m);
-		samples[i] = slot_delta_after(seq);
+	{
+		uint32_t blocked[WCET_SAMPLES];
+		uint32_t bmn, bavg, bmx;
+
+		for (i = 0u; i < WCET_SAMPLES; i++) {
+			m.label = 0x100u;
+			seq = g_ulmk_syscall_wcet.seq;
+			(void)ulmk_ep_call(g_ipc_ep, &m);
+			samples[i] = slot_delta_after(seq);
+			blocked[i] = slot_blocked_after(seq);
+		}
+		stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
+		stats_from_samples(blocked, WCET_SAMPLES, &bmn, &bavg, &bmx);
+		(void)bmn;
+		(void)bmx;
+		record_blk("ep_call", mn, avg, mx, bavg);
 	}
-	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
-	record("ep_call", mn, avg, mx);
 
 	m.label = 0xDEADu;
 	(void)ulmk_ep_call(g_ipc_ep, &m);
