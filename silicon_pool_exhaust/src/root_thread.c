@@ -17,9 +17,10 @@ static void put_u32(uint32_t v) {
 }
 static ulmk_tid_t spawn(const char *name, void (*entry)(void *), void *arg,
 			uint8_t prio, size_t stack, size_t heap) {
-	ulmk_thread_attr_t a; (void)heap;
+	ulmk_thread_attr_t a = {0}; (void)heap;
 	a.name=name; a.entry=entry; a.arg=arg; a.priority=prio;
 	a.stack_size=stack; a.privilege=ULMK_PRIV_DRIVER; a.heap_size=0u;
+	a.cpu = 0u;
 	return ulmk_thread_create(&a);
 }
 void __attribute__((noinline)) silicon_pool_exhaust_done(void) {}

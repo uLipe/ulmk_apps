@@ -114,7 +114,7 @@ static void idle_target(void *arg)
 static ulmk_tid_t spawn(const char *name, void (*entry)(void *), void *arg,
 			uint8_t prio, size_t heap)
 {
-	ulmk_thread_attr_t a;
+	ulmk_thread_attr_t a = {0};
 
 	a.name       = name;
 	a.entry      = entry;
@@ -123,6 +123,7 @@ static ulmk_tid_t spawn(const char *name, void (*entry)(void *), void *arg,
 	a.stack_size = 1024;
 	a.privilege  = ULMK_PRIV_DRIVER;
 	a.heap_size  = heap;
+	a.cpu = 0u;
 	return ulmk_thread_create(&a);
 }
 

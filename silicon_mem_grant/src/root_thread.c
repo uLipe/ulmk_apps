@@ -85,7 +85,7 @@ static int map_ok(const void *p)
 static ulmk_tid_t spawn(const char *name, void (*entry)(void *), void *arg,
 			uint8_t prio)
 {
-	ulmk_thread_attr_t a;
+	ulmk_thread_attr_t a = {0};
 
 	a.name       = name;
 	a.entry      = entry;
@@ -94,6 +94,7 @@ static ulmk_tid_t spawn(const char *name, void (*entry)(void *), void *arg,
 	a.stack_size = 1024u;
 	a.privilege  = ULMK_PRIV_DRIVER;
 	a.heap_size  = 0u;
+	a.cpu = 0u;
 	return ulmk_thread_create(&a);
 }
 

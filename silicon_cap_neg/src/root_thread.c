@@ -115,7 +115,7 @@ static int map_ok(const void *p)
 static ulmk_tid_t spawn(const char *name, void (*entry)(void *), void *arg,
 			uint8_t prio, size_t heap, ulmk_privilege_t priv)
 {
-	ulmk_thread_attr_t a;
+	ulmk_thread_attr_t a = {0};
 
 	a.name       = name;
 	a.entry      = entry;
@@ -124,6 +124,7 @@ static ulmk_tid_t spawn(const char *name, void (*entry)(void *), void *arg,
 	a.stack_size = 1024u;
 	a.privilege  = priv;
 	a.heap_size  = heap;
+	a.cpu = 0u;
 	return ulmk_thread_create(&a);
 }
 
@@ -136,7 +137,7 @@ static void idle_victim(void *arg)
 
 static void user_probe(void *arg)
 {
-	ulmk_thread_attr_t a;
+	ulmk_thread_attr_t a = {0};
 	ulmk_notif_t       n;
 	void              *p;
 	ulmk_tid_t         tid;
@@ -150,6 +151,7 @@ static void user_probe(void *arg)
 	a.stack_size = 512u;
 	a.privilege  = ULMK_PRIV_USER;
 	a.heap_size  = 0u;
+	a.cpu = 0u;
 	tid = ulmk_thread_create(&a);
 	g_user_spawn_eperm = tid_is_eperm(tid);
 
@@ -175,7 +177,7 @@ static void user_probe(void *arg)
 
 static void driver_probe(void *arg)
 {
-	ulmk_thread_attr_t a;
+	ulmk_thread_attr_t a = {0};
 	ulmk_notif_t       n;
 	void              *p;
 	ulmk_tid_t         tid;
@@ -189,6 +191,7 @@ static void driver_probe(void *arg)
 	a.stack_size = 512u;
 	a.privilege  = ULMK_PRIV_USER;
 	a.heap_size  = 0u;
+	a.cpu = 0u;
 	tid = ulmk_thread_create(&a);
 	g_drv_spawn_eperm = tid_is_eperm(tid);
 

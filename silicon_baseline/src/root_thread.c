@@ -42,6 +42,7 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	attr.stack_size = 2048u;
 	attr.privilege  = ULMK_PRIV_USER;
 
+	attr.cpu = 0u;
 	tid = ulmk_thread_create(&attr);
 	(void)tid;
 

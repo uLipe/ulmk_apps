@@ -48,6 +48,8 @@ static ULMK_PRIVATE uint32_t g_srv_reply[WCET_SAMPLES];
 static ULMK_PRIVATE uint32_t g_srv_rr[WCET_SAMPLES];
 static ULMK_PRIVATE uint32_t g_srv_n;
 static ULMK_PRIVATE uint32_t g_srv_rr_n;
+/* Reported by IPC servers — 1 means cross-CPU under SMP. */
+static ULMK_PRIVATE volatile uint32_t g_ipc_srv_cpu;
 
 static void put_u32(uint32_t v)
 {
@@ -139,25 +141,28 @@ static void stats_from_samples(const uint32_t *s, uint32_t n,
 	*avg = (n > 0u) ? (uint32_t)(sum / n) : 0u;
 }
 
-static uint32_t slot_delta_after(uint32_t seq_before)
+static uint32_t slot_delta_after(volatile struct ulmk_syscall_wcet_slot *s,
+				uint32_t seq_before)
 {
-	if (g_ulmk_syscall_wcet.magic != ULMK_SYSCALL_WCET_MAGIC)
+	if (!s || s->magic != ULMK_SYSCALL_WCET_MAGIC)
 		return 0u;
-	if (g_ulmk_syscall_wcet.seq == seq_before)
+	if (s->seq == seq_before)
 		return 0u;
-	return g_ulmk_syscall_wcet.delta;
+	return s->delta;
 }
 
-static uint32_t slot_blocked_after(uint32_t seq_before)
+static uint32_t slot_blocked_after(volatile struct ulmk_syscall_wcet_slot *s,
+				  uint32_t seq_before)
 {
-	if (g_ulmk_syscall_wcet.magic != ULMK_SYSCALL_WCET_MAGIC)
+	if (!s || s->magic != ULMK_SYSCALL_WCET_MAGIC)
 		return 0u;
-	if (g_ulmk_syscall_wcet.seq == seq_before)
+	if (s->seq == seq_before)
 		return 0u;
-	return g_ulmk_syscall_wcet.blocked;
+	return s->blocked;
 }
 
-static void sample_void_fn(void (*fn)(void), const char *name)
+static void sample_void_fn(void (*fn)(void), const char *name,
+			   volatile struct ulmk_syscall_wcet_slot *slot)
 {
 	uint32_t samples[WCET_SAMPLES];
 	uint32_t blocked[WCET_SAMPLES];
@@ -166,10 +171,10 @@ static void sample_void_fn(void (*fn)(void), const char *name)
 	for (i = 0u; i < WCET_WARMUP; i++)
 		fn();
 	for (i = 0u; i < WCET_SAMPLES; i++) {
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot->seq;
 		fn();
-		samples[i] = slot_delta_after(seq);
-		blocked[i] = slot_blocked_after(seq);
+		samples[i] = slot_delta_after(slot, seq);
+		blocked[i] = slot_blocked_after(slot, seq);
 	}
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
 	stats_from_samples(blocked, WCET_SAMPLES, &bmn, &bavg, &bmx);
@@ -191,10 +196,10 @@ static void wrap_yield(void)
 	(void)ulmk_thread_yield();
 }
 
-static ulmk_tid_t spawn(const char *name, void (*entry)(void *), void *arg,
-			uint8_t prio, size_t stack, size_t heap)
+static ulmk_tid_t spawn_cpu(const char *name, void (*entry)(void *), void *arg,
+			    uint8_t prio, size_t stack, size_t heap, uint8_t cpu)
 {
-	ulmk_thread_attr_t a;
+	ulmk_thread_attr_t a = {0};
 
 	a.name       = name;
 	a.entry      = entry;
@@ -203,7 +208,14 @@ static ulmk_tid_t spawn(const char *name, void (*entry)(void *), void *arg,
 	a.stack_size = stack;
 	a.privilege  = ULMK_PRIV_DRIVER;
 	a.heap_size  = heap;
+	a.cpu        = cpu;
 	return ulmk_thread_create(&a);
+}
+
+static ulmk_tid_t spawn(const char *name, void (*entry)(void *), void *arg,
+			uint8_t prio, size_t stack, size_t heap)
+{
+	return spawn_cpu(name, entry, arg, prio, stack, heap, 0u);
 }
 
 /*
@@ -235,13 +247,16 @@ static void ipc_server(void *arg)
 	uint32_t   seq, recv_dt, n = 0u;
 	int        done;
 	int        skip = 1;
+	volatile struct ulmk_syscall_wcet_slot slot;
 
 	(void)arg;
+	(void)ulmk_wcet_bind(&slot);
+	g_ipc_srv_cpu = ulmk_cpu_id();
 	for (;;) {
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot.seq;
 		if (ulmk_ep_recv(ep, &m, &snd) != ULMK_OK)
 			break;
-		recv_dt = slot_delta_after(seq);
+		recv_dt = slot_delta_after(&slot, seq);
 
 		done = (m.label == 0xDEADu);
 		if (done) {
@@ -261,10 +276,10 @@ static void ipc_server(void *arg)
 		if (n < WCET_SAMPLES)
 			g_srv_recv[n] = recv_dt;
 		m.label++;
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot.seq;
 		ulmk_ep_reply(snd, &m);
 		if (n < WCET_SAMPLES)
-			g_srv_reply[n] = slot_delta_after(seq);
+			g_srv_reply[n] = slot_delta_after(&slot, seq);
 		n++;
 	}
 	ulmk_thread_exit();
@@ -279,8 +294,11 @@ static void ipc_rr_server(void *arg)
 	ulmk_tid_t snd;
 	uint32_t   seq;
 	uint32_t   nr = 0u;
+	volatile struct ulmk_syscall_wcet_slot slot;
 
 	(void)arg;
+	(void)ulmk_wcet_bind(&slot);
+	g_ipc_srv_cpu = ulmk_cpu_id();
 	g_peer_ready = 1;
 	g_srv_rr_n = 0u;
 
@@ -294,11 +312,11 @@ static void ipc_rr_server(void *arg)
 	for (;;) {
 		out = m;
 		out.label++;
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot.seq;
 		if (ulmk_ep_reply_recv(ep, snd, &out, &m, &snd) != ULMK_OK)
 			break;
 		if (nr < WCET_SAMPLES)
-			g_srv_rr[nr++] = slot_delta_after(seq);
+			g_srv_rr[nr++] = slot_delta_after(&slot, seq);
 		if (m.label == 0xDEADu) {
 			ulmk_ep_reply(snd, &m);
 			break;
@@ -317,11 +335,13 @@ static void heap_extend_one(void *arg)
 {
 	uint32_t idx = (uint32_t)(uintptr_t)arg;
 	uint32_t seq;
+	volatile struct ulmk_syscall_wcet_slot slot;
 
-	seq = g_ulmk_syscall_wcet.seq;
+	(void)ulmk_wcet_bind(&slot);
+	seq = slot.seq;
 	(void)ulmk_heap_extend(64u);
 	if (idx < WCET_SAMPLES)
-		g_heap_ext[idx] = slot_delta_after(seq);
+		g_heap_ext[idx] = slot_delta_after(&slot, seq);
 	g_heap_ext_n++;
 	ulmk_thread_exit();
 }
@@ -332,11 +352,14 @@ static void heap_worker(void *arg)
 	uint32_t samples[WCET_SAMPLES];
 	uint32_t i, seq, mn, avg, mx;
 
+	volatile struct ulmk_syscall_wcet_slot slot;
+
 	(void)arg;
+	(void)ulmk_wcet_bind(&slot);
 	for (i = 0u; i < WCET_SAMPLES; i++) {
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot.seq;
 		(void)ulmk_get_thread_heap(&hi);
-		samples[i] = slot_delta_after(seq);
+		samples[i] = slot_delta_after(&slot, seq);
 	}
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
 	record("get_thread_heap", mn, avg, mx);
@@ -363,6 +386,7 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	uint32_t samples[WCET_SAMPLES];
 	uint32_t i, seq, mn, avg, mx, bits, slack, s;
 	uint32_t avgs[3];
+	volatile struct ulmk_syscall_wcet_slot slot;
 	ulmk_tid_t self, peer, srv;
 	ulmk_ep_t ep, tmp;
 	ulmk_notif_t n;
@@ -385,7 +409,8 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	board_services_init(info);
 	ulmk_board_hil_mark(3u);
 	board_console_puts("SILICON_WCET: begin\n");
-	if (g_ulmk_syscall_wcet.magic != ULMK_SYSCALL_WCET_MAGIC) {
+	if (ulmk_wcet_bind(&slot) != ULMK_OK ||
+	    slot.magic != ULMK_SYSCALL_WCET_MAGIC) {
 		board_console_puts("SILICON_WCET: FAIL no-slot\n");
 		ulmk_board_hil_mark(0xDEADu);
 		silicon_wcet_done();
@@ -398,20 +423,53 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	board_console_puts(" tol%=");
 	put_u32(WCET_TOL_NUM);
 	board_console_putc('\n');
+	board_console_puts("root_cpu=");
+	put_u32(ulmk_cpu_id());
+	board_console_putc('\n');
 
 	g_fail = 0;
 	g_target = ULMK_TID_INVALID;
 	g_park = ulmk_notif_create();
+	if (g_park == ULMK_NOTIF_INVALID) {
+		board_console_puts("SILICON_WCET: FAIL park-notif\n");
+		ulmk_board_hil_mark(0xDEADu);
+		silicon_wcet_done();
+		ulmk_thread_exit();
+	}
+
+	/*
+	 * Affinity soak: attr.cpu=1 must succeed on UP (clamp → CPU0) and pin
+	 * the peer on CPU1 when SMP is enabled.
+	 */
+	{
+		ulmk_tid_t soak;
+
+		g_peer_ready = 0;
+		soak = spawn_cpu("waff", park_peer, NULL, 0u, 1024u, 0u, 1u);
+		if (soak == ULMK_TID_INVALID) {
+			g_fail++;
+			board_console_puts("affinity_cpu1 FAIL spawn\n");
+		} else {
+			wait_ready();
+			board_console_puts("affinity_cpu1 spawn=ok\n");
+			(void)ulmk_notif_signal(g_park, 0x1u);
+			for (i = 0u; i < 1000u; i++)
+				ulmk_thread_yield();
+			(void)ulmk_thread_kill(soak);
+			ulmk_thread_yield();
+		}
+		g_peer_ready = 0;
+	}
 
 	board_console_puts("> thread\n");
-	sample_void_fn(wrap_self, "thread_self");
-	sample_void_fn(wrap_yield, "thread_yield");
+	sample_void_fn(wrap_self, "thread_self", &slot);
+	sample_void_fn(wrap_yield, "thread_yield", &slot);
 
 	self = ulmk_thread_self();
 	for (i = 0u; i < WCET_SAMPLES; i++) {
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot.seq;
 		(void)ulmk_thread_priority_get(self);
-		samples[i] = slot_delta_after(seq);
+		samples[i] = slot_delta_after(&slot, seq);
 	}
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
 	record("thread_priority_get", mn, avg, mx);
@@ -423,9 +481,9 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	ulmk_board_hil_mark(6u);
 
 	for (i = 0u; i < WCET_SAMPLES; i++) {
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot.seq;
 		(void)ulmk_thread_priority_set(peer, 0u);
-		samples[i] = slot_delta_after(seq);
+		samples[i] = slot_delta_after(&slot, seq);
 	}
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
 	record("thread_priority_set", mn, avg, mx);
@@ -435,9 +493,9 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 		(void)ulmk_thread_resume(peer);
 	}
 	for (i = 0u; i < WCET_SAMPLES; i++) {
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot.seq;
 		(void)ulmk_thread_suspend(peer);
-		samples[i] = slot_delta_after(seq);
+		samples[i] = slot_delta_after(&slot, seq);
 		(void)ulmk_thread_resume(peer);
 	}
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
@@ -445,9 +503,9 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 
 	for (i = 0u; i < WCET_SAMPLES; i++) {
 		(void)ulmk_thread_suspend(peer);
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot.seq;
 		(void)ulmk_thread_resume(peer);
-		samples[i] = slot_delta_after(seq);
+		samples[i] = slot_delta_after(&slot, seq);
 	}
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
 	record("thread_resume", mn, avg, mx);
@@ -458,9 +516,9 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	for (i = 0u; i < WCET_SAMPLES; i++) {
 		ulmk_tid_t t;
 
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot.seq;
 		t = spawn("wtmp", low_idle, NULL, 200u, 512u, 0u);
-		samples[i] = slot_delta_after(seq);
+		samples[i] = slot_delta_after(&slot, seq);
 		if (t != ULMK_TID_INVALID) {
 			ulmk_thread_kill(t);
 			ulmk_thread_yield();
@@ -472,9 +530,9 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	for (i = 0u; i < WCET_SAMPLES; i++) {
 		ulmk_tid_t t = spawn("wkill", low_idle, NULL, 200u, 512u, 0u);
 
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot.seq;
 		(void)ulmk_thread_kill(t);
-		samples[i] = slot_delta_after(seq);
+		samples[i] = slot_delta_after(&slot, seq);
 		ulmk_thread_yield();
 	}
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
@@ -484,9 +542,9 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 
 	board_console_puts("> ipc\n");
 	for (i = 0u; i < WCET_SAMPLES; i++) {
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot.seq;
 		tmp = ulmk_ep_create();
-		samples[i] = slot_delta_after(seq);
+		samples[i] = slot_delta_after(&slot, seq);
 		ulmk_ep_destroy(tmp);
 	}
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
@@ -494,9 +552,9 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 
 	for (i = 0u; i < WCET_SAMPLES; i++) {
 		tmp = ulmk_ep_create();
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot.seq;
 		(void)ulmk_ep_destroy(tmp);
-		samples[i] = slot_delta_after(seq);
+		samples[i] = slot_delta_after(&slot, seq);
 	}
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
 	record("ep_destroy", mn, avg, mx);
@@ -504,7 +562,13 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	g_ipc_ep = ulmk_ep_create();
 	g_peer_done = 0;
 	g_srv_n = 0u;
-	srv = spawn("wipc", ipc_server, NULL, 1u, 1024u, 0u);
+	g_ipc_srv_cpu = 0xFFu;
+	/*
+	 * Same-CPU IPC: WCET measures pure syscall cost on this core.
+	 * Cross-CPU wake latency is not a syscall WCET concern (affinity
+	 * soak above already covers attr.cpu=1 clamp / pin).
+	 */
+	srv = spawn_cpu("wipc", ipc_server, NULL, 1u, 1024u, 0u, 0u);
 	ulmk_ep_grant(g_ipc_ep, srv);
 	/*
 	 * Drop below the server so ep_reply returns to the server before
@@ -513,9 +577,9 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	(void)ulmk_thread_priority_set(self, 3u);
 
 	for (i = 0u; i < WCET_SAMPLES; i++) {
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot.seq;
 		(void)ulmk_ep_grant(g_ipc_ep, srv);
-		samples[i] = slot_delta_after(seq);
+		samples[i] = slot_delta_after(&slot, seq);
 	}
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
 	record("ep_grant", mn, avg, mx);
@@ -528,10 +592,10 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 
 		for (i = 0u; i < WCET_SAMPLES; i++) {
 			m.label = 0x100u;
-			seq = g_ulmk_syscall_wcet.seq;
+			seq = slot.seq;
 			(void)ulmk_ep_call(g_ipc_ep, &m);
-			samples[i] = slot_delta_after(seq);
-			blocked[i] = slot_blocked_after(seq);
+			samples[i] = slot_delta_after(&slot, seq);
+			blocked[i] = slot_blocked_after(&slot, seq);
 		}
 		stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
 		stats_from_samples(blocked, WCET_SAMPLES, &bmn, &bavg, &bmx);
@@ -554,6 +618,9 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 		g_fail++;
 		board_console_puts("ep_recv FAIL\n");
 	}
+	board_console_puts("ipc_srv_cpu=");
+	put_u32(g_ipc_srv_cpu);
+	board_console_putc('\n');
 	ulmk_thread_kill(srv);
 	ulmk_ep_destroy(g_ipc_ep);
 
@@ -562,7 +629,8 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	g_peer_done = 0;
 	g_peer_ready = 0;
 	g_srv_rr_n = 0u;
-	srv = spawn("wrr", ipc_rr_server, NULL, 1u, 1024u, 0u);
+	g_ipc_srv_cpu = 0xFFu;
+	srv = spawn_cpu("wrr", ipc_rr_server, NULL, 1u, 1024u, 0u, 0u);
 	ulmk_ep_grant(g_ipc_ep, srv);
 	(void)ulmk_thread_priority_set(self, 3u);
 	wait_ready();
@@ -590,9 +658,9 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	n = ulmk_notif_create();
 	for (i = 0u; i < WCET_SAMPLES; i++) {
 		ulmk_notif_signal(n, 0x1u);
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot.seq;
 		(void)ulmk_ep_recv_or_notif(ep, n, 0x1u, &m, &sender, &bits);
-		samples[i] = slot_delta_after(seq);
+		samples[i] = slot_delta_after(&slot, seq);
 	}
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
 	record("ep_recv_or_notif", mn, avg, mx);
@@ -602,36 +670,36 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	for (i = 0u; i < WCET_SAMPLES; i++) {
 		ulmk_notif_t nc;
 
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot.seq;
 		nc = ulmk_notif_create();
-		samples[i] = slot_delta_after(seq);
+		samples[i] = slot_delta_after(&slot, seq);
 		ulmk_notif_destroy(nc);
 	}
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
 	record("notif_create", mn, avg, mx);
 
 	for (i = 0u; i < WCET_SAMPLES; i++) {
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot.seq;
 		(void)ulmk_notif_signal(n, 0x1u);
-		samples[i] = slot_delta_after(seq);
+		samples[i] = slot_delta_after(&slot, seq);
 	}
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
 	record("notif_signal", mn, avg, mx);
 
 	for (i = 0u; i < WCET_SAMPLES; i++) {
 		ulmk_notif_signal(n, 0x1u);
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot.seq;
 		(void)ulmk_notif_poll(n, 0x1u);
-		samples[i] = slot_delta_after(seq);
+		samples[i] = slot_delta_after(&slot, seq);
 	}
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
 	record("notif_poll", mn, avg, mx);
 
 	for (i = 0u; i < WCET_SAMPLES; i++) {
 		ulmk_notif_signal(n, 0x2u);
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot.seq;
 		(void)ulmk_notif_wait(n, 0x2u, &bits);
-		samples[i] = slot_delta_after(seq);
+		samples[i] = slot_delta_after(&slot, seq);
 	}
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
 	record("notif_wait", mn, avg, mx);
@@ -639,9 +707,9 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	for (i = 0u; i < WCET_SAMPLES; i++) {
 		ulmk_notif_t x = ulmk_notif_create();
 
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot.seq;
 		(void)ulmk_notif_destroy(x);
-		samples[i] = slot_delta_after(seq);
+		samples[i] = slot_delta_after(&slot, seq);
 	}
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
 	record("notif_destroy", mn, avg, mx);
@@ -651,11 +719,11 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	board_console_puts("> mem\n");
 	for (s = 0u; s < 3u; s++) {
 		for (i = 0u; i < WCET_SAMPLES; i++) {
-			seq = g_ulmk_syscall_wcet.seq;
+			seq = slot.seq;
 			p = ulmk_mem_map(NULL, sizes[s],
 					 ULMK_PERM_READ | ULMK_PERM_WRITE,
 					 ULMK_MMAP_ANON);
-			samples[i] = slot_delta_after(seq);
+			samples[i] = slot_delta_after(&slot, seq);
 			if (p)
 				ulmk_mem_unmap(p, sizes[s]);
 		}
@@ -677,9 +745,9 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	for (i = 0u; i < WCET_SAMPLES; i++) {
 		p = ulmk_mem_map(NULL, 256u, ULMK_PERM_READ | ULMK_PERM_WRITE,
 				 ULMK_MMAP_ANON);
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot.seq;
 		(void)ulmk_mem_unmap(p, 256u);
-		samples[i] = slot_delta_after(seq);
+		samples[i] = slot_delta_after(&slot, seq);
 	}
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
 	record("mem_unmap", mn, avg, mx);
@@ -687,9 +755,9 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	for (i = 0u; i < WCET_SAMPLES; i++) {
 		p = ulmk_mem_map(NULL, 128u, ULMK_PERM_READ | ULMK_PERM_WRITE,
 				 ULMK_MMAP_ANON);
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot.seq;
 		(void)ulmk_mem_grant(p, 128u, g_target, ULMK_PERM_READ);
-		samples[i] = slot_delta_after(seq);
+		samples[i] = slot_delta_after(&slot, seq);
 		if (p)
 			ulmk_mem_unmap(p, 128u);
 	}
@@ -708,38 +776,38 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	 * Measure that single kernel path; o1 uses a 0-width window (ok if
 	 * delta captured).
 	 */
-	seq = g_ulmk_syscall_wcet.seq;
+	seq = slot.seq;
 	(void)ulmk_irq_bind(5u, n, 0u);
-	mn = slot_delta_after(seq);
+	mn = slot_delta_after(&slot, seq);
 	record_custom("irq_bind", mn, mn, mn, mn > 0u ? 1 : 0);
 	for (i = 0u; i < WCET_SAMPLES; i++) {
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot.seq;
 		(void)ulmk_irq_enable(5u);
-		samples[i] = slot_delta_after(seq);
+		samples[i] = slot_delta_after(&slot, seq);
 		(void)ulmk_irq_disable(5u);
 	}
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
 	record("irq_enable", mn, avg, mx);
 	(void)ulmk_irq_enable(5u);
 	for (i = 0u; i < WCET_SAMPLES; i++) {
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot.seq;
 		(void)ulmk_irq_ack(5u);
-		samples[i] = slot_delta_after(seq);
+		samples[i] = slot_delta_after(&slot, seq);
 	}
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
 	record("irq_ack", mn, avg, mx);
 	for (i = 0u; i < WCET_SAMPLES; i++) {
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot.seq;
 		(void)ulmk_irq_disable(5u);
-		samples[i] = slot_delta_after(seq);
+		samples[i] = slot_delta_after(&slot, seq);
 	}
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
 	record("irq_disable", mn, avg, mx);
 	for (i = 0u; i < WCET_SAMPLES; i++) {
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot.seq;
 		(void)ulmk_irq_bind_hw((uint8_t)(20u + i), n, 0u,
 				       (uintptr_t)ULMK_BOARD_SRC_STM0_SR1);
-		samples[i] = slot_delta_after(seq);
+		samples[i] = slot_delta_after(&slot, seq);
 	}
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
 	record("irq_bind_hw", mn, avg, mx);
@@ -752,9 +820,9 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	for (i = 0u; i < WCET_SAMPLES; i++)
 		(void)ulmk_irq_disable((uint8_t)(20u + i));
 	for (i = 0u; i < WCET_SAMPLES; i++) {
-		seq = g_ulmk_syscall_wcet.seq;
+		seq = slot.seq;
 		(void)ulmk_cap_grant(g_target, ULMK_CAP_SPAWN);
-		samples[i] = slot_delta_after(seq);
+		samples[i] = slot_delta_after(&slot, seq);
 	}
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
 	record("cap_grant", mn, avg, mx);

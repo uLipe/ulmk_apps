@@ -3,9 +3,11 @@
  * silicon_irq_stress — HIL IRQ flood / ooo-ack / rebind / preempt / exhaust.
  * Expect: SILICON_IRQ_STRESS: PASS  scratch 0x0106
  *
- * Real AURIX: soft SETR on SRC from userspace raises class-4 bus errors on
- * this kit.  Generate IRQs via STM0 CMP1 → SRC_STM0SR1 (SRPN 8), leaving
- * board_timer's CMP0/SR0 alone.
+ * Real AURIX (TC275): userspace SRC SETR is either a class-4 bus error or
+ * latches ICR.PIPN without taking the BIV slot.  STM0 CMP1 → SR1 can set
+ * CMP1IR without ever asserting SRC.SRR.  Use the proven board_timer path
+ * (CMP0 → STMIR0 → SRC_STM0SR0) and do not start board_timer — it owns the
+ * same compare line.
  */
 
 #include <stdint.h>
@@ -14,9 +16,10 @@
 #include <ulmk/linker.h>
 #include <board_config.h>
 
-void board_services_init(const ulmk_boot_info_t *info);
+ulmk_tid_t board_console_start(const ulmk_boot_info_t *info);
 void board_console_putc(char c);
 void board_console_puts(const char *s);
+ulmk_tid_t pinmux_init(uint8_t cpu);
 void ulmk_board_hil_mark(uint32_t n);
 
 __attribute__((weak)) void ulmk_board_hil_mark(uint32_t n)
@@ -31,23 +34,20 @@ __attribute__((weak)) void ulmk_board_hil_mark(uint32_t n)
 #define FLOOD_N		32
 #define PREEMPT_N	16
 
-#define UL_IRQ_SRPN	8u
-#define UL_IRQ_SRC	((uintptr_t)ULMK_BOARD_SRC_STM0_SR1)
+#define UL_IRQ_SRPN	ULMK_BOARD_IRQ_STM0
+#define UL_IRQ_SRC	((uintptr_t)ULMK_BOARD_SRC_STM0_SR0)
 
 #define STM0_MAP_SIZE	0x100u
 #define STM0_TIM0	(ULMK_BOARD_STM0_BASE + 0x010u)
-#define STM0_CMP1	(ULMK_BOARD_STM0_BASE + 0x034u)
+#define STM0_CMP0	(ULMK_BOARD_STM0_BASE + 0x030u)
 #define STM0_CMCON	(ULMK_BOARD_STM0_BASE + 0x038u)
 #define STM0_ICR	(ULMK_BOARD_STM0_BASE + 0x03Cu)
 #define STM0_ISCR	(ULMK_BOARD_STM0_BASE + 0x040u)
 
-/*
- * STM_ICR: CMP0EN/IR/OS in bits 0–2, CMP1EN/IR/OS in bits 4–6.
- * CMP1OS=1 routes compare-1 to STMIR1 → SRC_STM0SR1 (not SR0/board_timer).
- */
-#define ICR_CMP1EN	(1u << 4)
-#define ICR_CMP1OS	(1u << 6)
-#define ISCR_CMP1IRR	(1u << 2)
+#define ICR_CMP0EN	(1u << 0)
+#define ISCR_CMP0IRR	(1u << 0)
+/* ~50 µs @ 100 MHz STM — enough margin past MMIO/scheduling skew. */
+#define STM_DELTA_TICKS	5000u
 
 static ULMK_PRIVATE int g_pass;
 static ULMK_PRIVATE int g_fail;
@@ -94,7 +94,7 @@ static void check(const char *name, int ok)
 static ulmk_tid_t spawn(const char *name, void (*entry)(void *), void *arg,
 			uint8_t prio, size_t stack)
 {
-	ulmk_thread_attr_t a;
+	ulmk_thread_attr_t a = {0};
 
 	a.name       = name;
 	a.entry      = entry;
@@ -103,6 +103,7 @@ static ulmk_tid_t spawn(const char *name, void (*entry)(void *), void *arg,
 	a.stack_size = stack;
 	a.privilege  = ULMK_PRIV_DRIVER;
 	a.heap_size  = 0u;
+	a.cpu = 0u;
 	return ulmk_thread_create(&a);
 }
 
@@ -117,21 +118,22 @@ static void irq_trigger(void)
 	uint32_t cmp;
 
 	/*
-	 * Same arming order as board_timer CMP0: clear, program future
-	 * compare, then enable CMP1EN.  Short delta ≈ 10 µs @ 100 MHz STM.
+	 * Exact board_timer arming order: disable + clear IR, program a
+	 * future CMP0, then enable.  Enabling with CMP already behind TIM0
+	 * continuously asserts SR0.
 	 */
-	g_stm0[stm0_off(STM0_ICR)]  &= ~ICR_CMP1EN;
-	g_stm0[stm0_off(STM0_ISCR)] = ISCR_CMP1IRR;
+	g_stm0[stm0_off(STM0_ICR)]  = 0u;
+	g_stm0[stm0_off(STM0_ISCR)] = ISCR_CMP0IRR;
 	now = g_stm0[stm0_off(STM0_TIM0)];
-	cmp = now + 1000u;
-	g_stm0[stm0_off(STM0_CMP1)] = cmp;
-	g_stm0[stm0_off(STM0_ICR)] |= ICR_CMP1EN | ICR_CMP1OS;
+	cmp = now + STM_DELTA_TICKS;
+	g_stm0[stm0_off(STM0_CMP0)] = cmp;
+	g_stm0[stm0_off(STM0_ICR)]  = ICR_CMP0EN;
 }
 
 static void irq_clear(void)
 {
-	g_stm0[stm0_off(STM0_ICR)]  &= ~ICR_CMP1EN;
-	g_stm0[stm0_off(STM0_ISCR)] = ISCR_CMP1IRR;
+	g_stm0[stm0_off(STM0_ICR)]  = 0u;
+	g_stm0[stm0_off(STM0_ISCR)] = ISCR_CMP0IRR;
 	(void)ulmk_irq_ack(UL_IRQ_SRPN);
 }
 
@@ -144,13 +146,9 @@ static int map_stm0(void)
 	if (!p)
 		return -1;
 	g_stm0 = (volatile uint32_t *)p;
-	/*
-	 * Preserve CMP0 MSIZE (board_timer); add CMP1 MSIZE=31 in high half.
-	 * board_timer wrote 0x0000001F — OR in MSIZE1.
-	 */
-	g_stm0[stm0_off(STM0_CMCON)] |= 0x001F0000u;
-	/* Keep CMP1 → IR1 even while CMP1EN is off between triggers. */
-	g_stm0[stm0_off(STM0_ICR)] |= ICR_CMP1OS;
+	g_stm0[stm0_off(STM0_CMCON)] = 0x0000001Fu;
+	g_stm0[stm0_off(STM0_ICR)]   = 0u;
+	g_stm0[stm0_off(STM0_ISCR)]  = ISCR_CMP0IRR;
 	return 0;
 }
 
@@ -208,11 +206,17 @@ static void fire_n(uint32_t n)
 {
 	uint32_t bits;
 	uint32_t i;
+	int      rc;
 
 	(void)ulmk_thread_priority_set(ulmk_thread_self(), 8u);
 	for (i = 0u; i < n; i++) {
 		bits = 0u;
-		(void)ulmk_notif_wait(g_sync, BIT_RDY, &bits);
+		rc = ulmk_notif_wait(g_sync, BIT_RDY | BIT_FIN, &bits);
+		if (rc != ULMK_OK || (bits & BIT_FIN)) {
+			(void)ulmk_thread_priority_set(ulmk_thread_self(),
+						       100u);
+			return;
+		}
 		irq_trigger();
 	}
 	bits = 0u;
@@ -223,13 +227,21 @@ static void fire_n(uint32_t n)
 static void run_flood(void)
 {
 	ulmk_tid_t w;
+	uint32_t   i;
 
 	g_count = 0;
+	g_bound = 0;
 	w = spawn("flood_w", irq_consumer, (void *)(uintptr_t)FLOOD_N,
 		  2u, 2048u);
 	CHECK("flood_spawn", w != ULMK_TID_INVALID);
 	(void)ulmk_cap_grant(w, ULMK_CAP_IRQ);
 	(void)ulmk_cap_grant(w, ULMK_CAP_MAP_PERIPH);
+	/* Let the worker bind STM0 before we block waiting on BIT_RDY. */
+	for (i = 0u; i < 4000u && !g_bound; i++)
+		ulmk_thread_yield();
+	CHECK("flood_bound", g_bound != 0);
+	if (!g_bound)
+		return;
 	fire_n(FLOOD_N);
 	CHECK("flood_count", g_count == FLOOD_N);
 }
@@ -299,9 +311,9 @@ static void run_bind_exhaust(void)
 	ulmk_notif_t dummy;
 
 	/*
-	 * Soft ulmk_irq_bind() assigns SRC_BASE+slot*4; walking that range
-	 * hits unimplemented SRC words on TC275 → class-4.  Exhaust via
-	 * bind_hw rewriting the same known-good SRC (table fill only).
+	 * Soft ulmk_irq_bind() walks SRC words that may #DE on TC275.
+	 * Exhaust via bind_hw rewriting the same known-good STM0 SR0
+	 * (table fill only; last writer owns the SRC).
 	 */
 	n = 0;
 	hit_nospace = 0;
@@ -324,8 +336,14 @@ static void run_bind_exhaust(void)
 
 void ulmk_root_thread(const ulmk_boot_info_t *info)
 {
+	ulmk_tid_t tid;
+
 	ulmk_board_hil_mark(1u);
-	board_services_init(info);
+	/* Console only — board_timer would own STM0 CMP0/SR0. */
+	tid = pinmux_init(0u);
+	if (tid == ULMK_TID_INVALID)
+		ulmk_board_hil_mark(0x70u);
+	(void)board_console_start(info);
 	ulmk_board_hil_mark(3u);
 	board_console_puts("SILICON_IRQ_STRESS: begin\n");
 	g_pass  = 0;
