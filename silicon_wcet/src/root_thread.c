@@ -743,6 +743,14 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	}
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
 	record("irq_bind_hw", mn, avg, mx);
+	/*
+	 * Disarm SRC slots before tearing down the notif / growing MPU via
+	 * heap_extend — live STM0_SR1 bindings have Class-4'd the PASS
+	 * console put on TC275.
+	 */
+	(void)ulmk_irq_disable(5u);
+	for (i = 0u; i < WCET_SAMPLES; i++)
+		(void)ulmk_irq_disable((uint8_t)(20u + i));
 	for (i = 0u; i < WCET_SAMPLES; i++) {
 		seq = g_ulmk_syscall_wcet.seq;
 		(void)ulmk_cap_grant(g_target, ULMK_CAP_SPAWN);
@@ -773,9 +781,6 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	stats_from_samples(g_heap_ext, WCET_SAMPLES, &mn, &avg, &mx);
 	record("heap_extend", mn, avg, mx);
 
-	ulmk_thread_kill(g_target);
-	ulmk_notif_destroy(g_park);
-
 	ulmk_board_hil_mark(9u);
 
 	if (g_fail == 0) {
@@ -788,5 +793,8 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 		board_console_putc('\n');
 	}
 	silicon_wcet_done();
+
+	ulmk_thread_kill(g_target);
+	ulmk_notif_destroy(g_park);
 	ulmk_thread_exit();
 }
