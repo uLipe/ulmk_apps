@@ -5,9 +5,14 @@
  *
  * Real AURIX (TC275): userspace SRC SETR is either a class-4 bus error or
  * latches ICR.PIPN without taking the BIV slot.  STM0 CMP1 → SR1 can set
- * CMP1IR without ever asserting SRC.SRR.  Use the proven board_timer path
- * (CMP0 → STMIR0 → SRC_STM0SR0) and do not start board_timer — it owns the
- * same compare line.
+ * CMP1IR without ever asserting SRC.SRR.
+ *
+ * Trigger via CMP0 → STMIR0 → SRC_STM0SR0 (same HW path as the arch tick),
+ * but bind a *non-tick* SRPN on that SRC.  The generic ISR early-returns on
+ * ULMK_BOARD_IRQ_TICK without ulmk_kern_irq_dispatch(), so reusing the tick
+ * SRPN would never wake the consumer.  Stealing SR0 for SRPN 10 suspends the
+ * kernel tick for the duration of this one-shot HIL — do not start
+ * board_timer / ulmk_tick_start from this app.
  */
 
 #include <stdint.h>
@@ -34,7 +39,7 @@ __attribute__((weak)) void ulmk_board_hil_mark(uint32_t n)
 #define FLOOD_N		32
 #define PREEMPT_N	16
 
-#define UL_IRQ_SRPN	ULMK_BOARD_IRQ_STM0
+#define UL_IRQ_SRPN	10u	/* must != ULMK_BOARD_IRQ_TICK (see file header) */
 #define UL_IRQ_SRC	((uintptr_t)ULMK_BOARD_SRC_STM0_SR0)
 
 #define STM0_MAP_SIZE	0x100u
@@ -159,7 +164,17 @@ static int bind_enable(void)
 	rc = ulmk_irq_bind_hw(UL_IRQ_SRPN, g_irq, IRQ_BIT_IDX, UL_IRQ_SRC);
 	if (rc != ULMK_OK)
 		return rc;
-	return ulmk_irq_enable(UL_IRQ_SRPN);
+	rc = ulmk_irq_enable(UL_IRQ_SRPN);
+	if (rc != ULMK_OK)
+		return rc;
+	/*
+	 * Quiesce the arch tick compare: with SRPN stolen, a live CMP0EN
+	 * would spam our notif.  irq_trigger() re-arms per shot.
+	 */
+	g_stm0[stm0_off(STM0_ICR)]  = 0u;
+	g_stm0[stm0_off(STM0_ISCR)] = ISCR_CMP0IRR;
+	(void)ulmk_irq_ack(UL_IRQ_SRPN);
+	return ULMK_OK;
 }
 
 static void irq_consumer(void *arg)
