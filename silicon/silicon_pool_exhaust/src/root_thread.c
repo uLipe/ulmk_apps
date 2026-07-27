@@ -32,9 +32,21 @@ void __attribute__((noinline)) silicon_pool_exhaust_done(void) {}
 
 static ULMK_PRIVATE int g_pass;
 static ULMK_PRIVATE int g_fail;
-static ULMK_PRIVATE ulmk_ep_t g_eps[MAX_EPS];
-static ULMK_PRIVATE ulmk_notif_t g_notifs[MAX_NOTIFS];
-static ULMK_PRIVATE ulmk_tid_t g_tids[MAX_THREADS];
+
+/*
+ * Handle trackers must NOT live in ULMK_PRIVATE: domain BSS sits before
+ * .isr_stack, and ~1 KiB of arrays push the ISP across
+ * ORIGIN(KERNEL_RAM)+0x8000 (_small_data_ / A0) on TriCore.
+ *
+ * Explicit .user_bss (after ISR).  Plain statics are not enough: TriCore
+ * -fdata-sections emits .g_eps / .g_notifs / … which the linker does not
+ * collect into .bss / .user_bss.
+ */
+#define POOL_TRACK __attribute__((section(".user_bss"), aligned(4)))
+
+static POOL_TRACK ulmk_ep_t g_eps[MAX_EPS];
+static POOL_TRACK ulmk_notif_t g_notifs[MAX_NOTIFS];
+static POOL_TRACK ulmk_tid_t g_tids[MAX_THREADS];
 
 static void check(const char *name, int ok)
 {
