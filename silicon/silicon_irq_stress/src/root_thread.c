@@ -39,6 +39,25 @@ __attribute__((weak)) void ulmk_board_hil_mark(uint32_t n)
 #define FLOOD_N		32
 #define PREEMPT_N	16
 
+#if defined(ULMK_BOARD_HIL_TIMER_BASE)
+/* ARM: TIM2 one-shot update IRQ (board enables TIM2 clock in board_init). */
+#define UL_IRQ_SRPN	ULMK_BOARD_IRQ_HIL_TIMER
+#define UL_IRQ_SRC	((uintptr_t)ULMK_BOARD_SRC_HIL_TIMER)
+#define HIL_TMR_MAP_SIZE	ULMK_BOARD_HIL_TIMER_SIZE
+#define TIM_CR1		0x00u
+#define TIM_DIER	0x0Cu
+#define TIM_SR		0x10u
+#define TIM_EGR		0x14u
+#define TIM_CNT		0x24u
+#define TIM_PSC		0x28u
+#define TIM_ARR		0x2Cu
+#define TIM_CR1_CEN	(1u << 0)
+#define TIM_CR1_OPM	(1u << 3)
+#define TIM_DIER_UIE	(1u << 0)
+#define TIM_SR_UIF	(1u << 0)
+#define TIM_EGR_UG	(1u << 0)
+#define TIM_DELTA	4800u	/* ~40 µs @ 120 MHz APB1*2 timer clk */
+#else
 #define UL_IRQ_SRPN	10u	/* must != ULMK_BOARD_IRQ_TICK (see file header) */
 #define UL_IRQ_SRC	((uintptr_t)ULMK_BOARD_SRC_STM0_SR0)
 
@@ -53,6 +72,7 @@ __attribute__((weak)) void ulmk_board_hil_mark(uint32_t n)
 #define ISCR_CMP0IRR	(1u << 0)
 /* ~50 µs @ 100 MHz STM — enough margin past MMIO/scheduling skew. */
 #define STM_DELTA_TICKS	5000u
+#endif
 
 static ULMK_PRIVATE int g_pass;
 static ULMK_PRIVATE int g_fail;
@@ -112,6 +132,51 @@ static ulmk_tid_t spawn(const char *name, void (*entry)(void *), void *arg,
 	return ulmk_thread_create(&a);
 }
 
+#if defined(ULMK_BOARD_HIL_TIMER_BASE)
+static inline uint32_t tim_off(uint32_t reg)
+{
+	return reg / sizeof(uint32_t);
+}
+
+static void irq_trigger(void)
+{
+	/* One-pulse: clear UIF, load ARR, force UG, start CEN+UIE. */
+	g_stm0[tim_off(TIM_CR1)]  = 0u;
+	g_stm0[tim_off(TIM_DIER)] = 0u;
+	g_stm0[tim_off(TIM_SR)]   = ~TIM_SR_UIF;
+	g_stm0[tim_off(TIM_PSC)]  = 0u;
+	g_stm0[tim_off(TIM_ARR)]  = TIM_DELTA;
+	g_stm0[tim_off(TIM_CNT)]  = 0u;
+	g_stm0[tim_off(TIM_EGR)]  = TIM_EGR_UG;
+	g_stm0[tim_off(TIM_SR)]   = ~TIM_SR_UIF;
+	g_stm0[tim_off(TIM_DIER)] = TIM_DIER_UIE;
+	g_stm0[tim_off(TIM_CR1)]  = TIM_CR1_CEN | TIM_CR1_OPM;
+}
+
+static void irq_clear(void)
+{
+	g_stm0[tim_off(TIM_CR1)]  = 0u;
+	g_stm0[tim_off(TIM_DIER)] = 0u;
+	g_stm0[tim_off(TIM_SR)]   = ~TIM_SR_UIF;
+	(void)ulmk_irq_ack(UL_IRQ_SRPN);
+}
+
+static int map_stm0(void)
+{
+	void *p;
+
+	p = ulmk_mem_map((void *)(uintptr_t)ULMK_BOARD_HIL_TIMER_BASE,
+			 HIL_TMR_MAP_SIZE,
+			 ULMK_PERM_READ | ULMK_PERM_WRITE, ULMK_MMAP_PERIPH);
+	if (!p)
+		return -1;
+	g_stm0 = (volatile uint32_t *)p;
+	g_stm0[tim_off(TIM_CR1)]  = 0u;
+	g_stm0[tim_off(TIM_DIER)] = 0u;
+	g_stm0[tim_off(TIM_SR)]   = ~TIM_SR_UIF;
+	return 0;
+}
+#else
 static inline uint32_t stm0_off(uint32_t reg)
 {
 	return (reg - ULMK_BOARD_STM0_BASE) / sizeof(uint32_t);
@@ -156,6 +221,7 @@ static int map_stm0(void)
 	g_stm0[stm0_off(STM0_ISCR)]  = ISCR_CMP0IRR;
 	return 0;
 }
+#endif
 
 static int bind_enable(void)
 {
@@ -167,12 +233,18 @@ static int bind_enable(void)
 	rc = ulmk_irq_enable(UL_IRQ_SRPN);
 	if (rc != ULMK_OK)
 		return rc;
+#if defined(ULMK_BOARD_HIL_TIMER_BASE)
+	g_stm0[tim_off(TIM_CR1)]  = 0u;
+	g_stm0[tim_off(TIM_DIER)] = 0u;
+	g_stm0[tim_off(TIM_SR)]   = ~TIM_SR_UIF;
+#else
 	/*
 	 * Quiesce the arch tick compare: with SRPN stolen, a live CMP0EN
 	 * would spam our notif.  irq_trigger() re-arms per shot.
 	 */
 	g_stm0[stm0_off(STM0_ICR)]  = 0u;
 	g_stm0[stm0_off(STM0_ISCR)] = ISCR_CMP0IRR;
+#endif
 	(void)ulmk_irq_ack(UL_IRQ_SRPN);
 	return ULMK_OK;
 }

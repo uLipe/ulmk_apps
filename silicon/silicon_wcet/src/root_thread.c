@@ -805,8 +805,13 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	record("irq_disable", mn, avg, mx);
 	for (i = 0u; i < WCET_SAMPLES; i++) {
 		seq = slot.seq;
+#if defined(ULMK_BOARD_SRC_HIL_TIMER)
+		(void)ulmk_irq_bind_hw((uint8_t)(20u + i), n, 0u,
+				       (uintptr_t)ULMK_BOARD_SRC_HIL_TIMER);
+#else
 		(void)ulmk_irq_bind_hw((uint8_t)(20u + i), n, 0u,
 				       (uintptr_t)ULMK_BOARD_SRC_STM0_SR1);
+#endif
 		samples[i] = slot_delta_after(&slot, seq);
 	}
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);

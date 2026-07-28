@@ -11,6 +11,7 @@
 #include <stddef.h>
 #include <ulmk/microkernel.h>
 #include <ulmk/linker.h>
+#include <board_config.h>
 
 void board_services_init(const ulmk_boot_info_t *info);
 void board_console_putc(char c);
@@ -403,12 +404,16 @@ static void deny_victim(void *arg)
 	(void)arg;
 	g_victim_ran = 1;
 	/*
-	 * Coarse DPR2 covers all user RAM, so anon-without-grant will not
-	 * trap.  Touch kernel SRAM below user_ram — PRS1 has no DPR1 → Class 1
-	 * → recoverable kill.
+	 * TriCore: coarse DPR covers user RAM, so touch kernel SRAM below
+	 * user_ram → Class 1.  ARMv7-M: static URAM is power-of-2 and may
+	 * swallow that hole — NULL is always MemManage for unprivileged.
 	 */
+#if defined(ULMK_BOARD_HIL_TIMER_BASE)
+	kernel_touch = (volatile uint32_t *)0u;
+#else
 	kernel_touch = (volatile uint32_t *)
 		((uintptr_t)_ulmk_user_ram_start - 64u);
+#endif
 	*kernel_touch = 0xBAD0BAD0u;
 	g_victim_ran = 2;
 	ulmk_thread_exit();
@@ -485,6 +490,9 @@ static uint32_t ptr_diff(const uint8_t *a, const uint8_t *b)
 static void print_report(void)
 {
 	board_console_puts("SILICON_STRESS: REPORT\n");
+#if defined(ULMK_BOARD_HIL_TIMER_BASE) || defined(ULMK_ARCH_ARMV8M)
+	board_console_puts("arch=arm\n");
+#else
 	board_console_puts("arch=tricore isa=");
 	put_u32(ULMK_BOARD_TRICORE_ISA_MAJOR);
 	board_console_putc('.');
@@ -492,6 +500,7 @@ static void print_report(void)
 	board_console_putc('.');
 	put_u32(ULMK_BOARD_TRICORE_ISA_PATCH);
 	board_console_putc('\n');
+#endif
 
 	put_kv_u32("fcpu_hz", ULMK_BOARD_FCPU_HZ);
 	put_kv_u32("fstm_hz", ULMK_BOARD_FSTM_HZ);
