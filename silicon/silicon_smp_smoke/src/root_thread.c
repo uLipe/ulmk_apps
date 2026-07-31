@@ -3,13 +3,11 @@
  * silicon_smp_smoke — HIL: every secondary alive + affinity pin + IPI wake.
  *
  * Sweeps every secondary the board declares rather than just the first one:
- * each core has its own SRC routing and CSA pool, so CPU1 running says
- * nothing about CPU2.  dev.py forces ULMK_CONFIG_ENABLE_SMP for this case.
+ * each core has its own interrupt routing, so CPU1 running says nothing
+ * about CPU2.  dev.py forces ULMK_CONFIG_ENABLE_SMP for this case.
  *
- * RAM-log only; no ASCLIN / notif heap (isolates affinity + IPI path).
- *
- * Shared flags MUST live in the component domain (ULMK_PRIVATE): .bss alone
- * lands in kernel RAM (PRS0-only) and kills DRIVER threads on touch.
+ * Console via board_console (UART + optional RAM log) so serial HIL works
+ * on boards without OpenOCD RAM dump.
  */
 
 #include <stdint.h>
@@ -17,7 +15,6 @@
 #include <ulmk/linker.h>
 #include <ulmk/platform.h>
 
-/* Board snapshot may say nothing; a machine we cannot ask has one core. */
 #ifndef ULMK_ARCH_NUM_CPU
 #define ULMK_ARCH_NUM_CPU	1
 #endif
@@ -29,10 +26,9 @@ __attribute__((weak)) void ulmk_board_hil_mark(uint32_t n)
 	(void)n;
 }
 
-extern volatile uint32_t g_ulmk_console_log_len;
-extern volatile char g_ulmk_console_log[];
-
-#define CONSOLE_LOG_SIZE	2048u
+void board_services_init(const ulmk_boot_info_t *info);
+void board_console_putc(char c);
+void board_console_puts(const char *s);
 
 void __attribute__((noinline)) silicon_smp_smoke_done(void);
 
@@ -43,25 +39,7 @@ void __attribute__((noinline)) silicon_smp_smoke_done(void);
  */
 static ULMK_PRIVATE volatile uint32_t g_seen[ULMK_ARCH_NUM_CPU];
 
-static void ram_putc(char c)
-{
-	uint32_t n = g_ulmk_console_log_len;
-
-	if (n >= CONSOLE_LOG_SIZE - 1u)
-		return;
-	g_ulmk_console_log[n] = c;
-	g_ulmk_console_log_len = n + 1u;
-}
-
-static void ram_puts(const char *s)
-{
-	if (!s)
-		return;
-	while (*s)
-		ram_putc(*s++);
-}
-
-static void ram_u32(uint32_t v)
+static void puts_u32(uint32_t v)
 {
 	char buf[12];
 	uint32_t n = 0u;
@@ -72,7 +50,7 @@ static void ram_u32(uint32_t v)
 	} while (v != 0u);
 
 	while (n--)
-		ram_putc(buf[n]);
+		board_console_putc(buf[n]);
 }
 
 static void worker(void *arg)
@@ -95,24 +73,23 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	uint32_t cpu;
 	uint32_t i;
 
-	(void)info;
-	g_ulmk_console_log_len = 0u;
 	ulmk_board_hil_mark(1u);
-
-	ram_puts("SILICON_SMP_SMOKE: begin\n");
+	board_services_init(info);
 	ulmk_board_hil_mark(3u);
 
+	board_console_puts("SILICON_SMP_SMOKE: begin\n");
+	ulmk_board_hil_mark(6u);
+
 	if (ulmk_cpu_id() != 0u) {
-		ram_puts("SILICON_SMP_SMOKE: FAIL root cpu\n");
+		board_console_puts("SILICON_SMP_SMOKE: FAIL root cpu\n");
 		ulmk_board_hil_mark(0xDEADu);
 		silicon_smp_smoke_done();
 		ulmk_thread_exit();
 	}
-	ulmk_board_hil_mark(6u);
 
-	ram_puts("SILICON_SMP_SMOKE: cpus=");
-	ram_u32((uint32_t)ULMK_ARCH_NUM_CPU);
-	ram_putc('\n');
+	board_console_puts("SILICON_SMP_SMOKE: cpus=");
+	puts_u32((uint32_t)ULMK_ARCH_NUM_CPU);
+	board_console_putc('\n');
 
 	for (cpu = 1u; cpu < (uint32_t)ULMK_ARCH_NUM_CPU; cpu++) {
 		attr.name       = "smpw";
@@ -128,9 +105,9 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 		tid = ulmk_thread_create(&attr);
 		if (tid == ULMK_TID_INVALID || (int32_t)tid < 0) {
 			ulmk_board_hil_mark(0xDEAD0000u | cpu);
-			ram_puts("SILICON_SMP_SMOKE: FAIL spawn cpu");
-			ram_u32(cpu);
-			ram_putc('\n');
+			board_console_puts("SILICON_SMP_SMOKE: FAIL spawn cpu");
+			puts_u32(cpu);
+			board_console_putc('\n');
 			silicon_smp_smoke_done();
 			ulmk_thread_exit();
 		}
@@ -148,29 +125,29 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 
 		if (g_seen[cpu] == 0u) {
 			ulmk_board_hil_mark(0xDEAD0000u | cpu);
-			ram_puts("SILICON_SMP_SMOKE: FAIL cpu");
-			ram_u32(cpu);
-			ram_puts(" not seen\n");
+			board_console_puts("SILICON_SMP_SMOKE: FAIL cpu");
+			puts_u32(cpu);
+			board_console_puts(" not seen\n");
 			silicon_smp_smoke_done();
 			ulmk_thread_exit();
 		}
 		if (g_seen[cpu] - 1u != cpu) {
 			ulmk_board_hil_mark(0xDEAD0000u | cpu);
-			ram_puts("SILICON_SMP_SMOKE: FAIL cpu");
-			ram_u32(cpu);
-			ram_puts(" ran on ");
-			ram_u32(g_seen[cpu] - 1u);
-			ram_putc('\n');
+			board_console_puts("SILICON_SMP_SMOKE: FAIL cpu");
+			puts_u32(cpu);
+			board_console_puts(" ran on ");
+			puts_u32(g_seen[cpu] - 1u);
+			board_console_putc('\n');
 			silicon_smp_smoke_done();
 			ulmk_thread_exit();
 		}
-		ram_puts("SILICON_SMP_SMOKE: cpu");
-		ram_u32(cpu);
-		ram_puts(" ok\n");
+		board_console_puts("SILICON_SMP_SMOKE: cpu");
+		puts_u32(cpu);
+		board_console_puts(" ok\n");
 	}
 
 	ulmk_board_hil_mark(0x5A11u);
-	ram_puts("SILICON_SMP_SMOKE: PASS\n");
+	board_console_puts("SILICON_SMP_SMOKE: PASS\n");
 	silicon_smp_smoke_done();
 	ulmk_thread_exit();
 }
