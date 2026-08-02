@@ -34,7 +34,19 @@ void ulmk_board_hil_mark(uint32_t n);
 #define WCET_WARMUP		1u
 #define WCET_TOL_NUM		10u
 #define WCET_TOL_DEN		100u
-#define WCET_FLOOR_TICKS	2u
+
+/*
+ * Absolute jitter floor, added to the relative envelope.  Where the core
+ * fetches through a cache sitting in front of the flash, one line refill
+ * already costs more than 10% of a short syscall, so the percentage alone
+ * reports memory-system noise as a complexity violation.  Boards on such a
+ * path raise the floor; the percentage still catches an O(n) blowup on the
+ * longer syscalls, where it dominates.
+ */
+#ifndef ULMK_BOARD_WCET_FLOOR_TICKS
+#define ULMK_BOARD_WCET_FLOOR_TICKS	2u
+#endif
+#define WCET_FLOOR_TICKS	ULMK_BOARD_WCET_FLOOR_TICKS
 
 static ULMK_PRIVATE int g_fail;
 static ULMK_PRIVATE ulmk_tid_t g_target;
@@ -422,6 +434,8 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	put_u32(WCET_SAMPLES);
 	board_console_puts(" tol%=");
 	put_u32(WCET_TOL_NUM);
+	board_console_puts(" floor=");
+	put_u32(WCET_FLOOR_TICKS);
 	board_console_putc('\n');
 	board_console_puts("root_cpu=");
 	put_u32(ulmk_cpu_id());
