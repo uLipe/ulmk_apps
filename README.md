@@ -8,17 +8,40 @@ container as `/ulmk_apps`).
 
 ```
 ulmk_apps/
+├── ulmk_device_classes/     ← portable DM class contracts (policy)
 ├── silicon/                 ← cert suite aggregator (recursive CMakeLists)
 │   ├── silicon_baseline/
 │   ├── silicon_e2e/
-│   ├── silicon_unit/
+│   ├── silicon_device_manager/
 │   └── …
+├── display_hello/           ← DM display smoke (ROOT_THREAD)
+├── display_touch/           ← DM display + input smoke
+├── lvgl_benchmark/          ← LVGL 9.5 via /dev/disp0 + /dev/input0
 ├── ping_pong/               ← standalone IPC demo (ROOT_THREAD)
-└── freertos/                ← FreeRTOS API shim (library, no ROOT_THREAD)
+├── freertos/                ← FreeRTOS API shim (library, no ROOT_THREAD)
+└── deps/lvgl/               ← LVGL v9.5.0 submodule (for lvgl_benchmark)
 ```
 
-Board demos (`board_blinky`, `board_adc_pot`, …) live under
-`ulmk_boards/<board>/components/` — not here.
+Board-local demos (`board_blinky`, `board_adc_pot`, `*_dm`, …) stay under
+`ulmk_boards/<board>/components/`.  Portable UI / cert apps that only need
+the device-manager class API live here.
+
+## Device manager policy (`ulmk_device_classes`)
+
+Header-only class contracts for the QNX-style device manager shipped in
+`ulmk` (`components/ulmk_device_manager` — mechanism only):
+
+| Header | Class | Typical path |
+|--------|-------|----------------|
+| `ulmk_device_display.h` | display | `/dev/dispN` |
+| `ulmk_device_input.h` | input | `/dev/inputN` |
+| `ulmk_device_can.h` | can | `/dev/canN` |
+| `ulmk_device_pwm.h` | pwm | `/dev/pwmN` |
+| `ulmk_device_adc.h` | adc | `/dev/adcN` |
+| `ulmk_device_gpio.h` | gpio | `/dev/gpioN` |
+
+Boards register endpoints with `board_devices_register_*` and implement
+`*_dm` adapters (`ulmk_dev_serve`).  Spec: `ulmk/docs/device_manager_spec.md`.
 
 ## Cert set (`silicon/`)
 
@@ -38,13 +61,15 @@ Board demos (`board_blinky`, `board_adc_pot`, …) live under
 | [`silicon_mem_grant`](silicon/silicon_mem_grant/) | Memory grant |
 | [`silicon_pool_exhaust`](silicon/silicon_pool_exhaust/) | Pool exhaustion |
 | [`silicon_recv_or_notif_race`](silicon/silicon_recv_or_notif_race/) | recv_or_notif race |
+| [`silicon_device_manager`](silicon/silicon_device_manager/) | Device manager + class paths (`SILICON_DEVICE_MANAGER: PASS`) |
 | [`silicon_smp_smoke`](silicon/silicon_smp_smoke/) | SMP smoke (`--enable-smp`) |
 
 `silicon/CMakeLists.txt` discovers each child directory that has its own
 `CMakeLists.txt` and registers it. Component `NAME` values stay `silicon_*`
 (unchanged for HIL / `dev.py --component`).
 
-Run order for silicon certs: baseline → e2e → unit → stress → wcet.
+Run order for silicon certs: baseline → e2e → unit → stress → wcet → …
+→ device_manager → smp_smoke (when applicable).
 
 ### Board contract
 
@@ -55,7 +80,10 @@ The BSP must provide:
 - `board_timer_start` / `board_timer_sleep_us`
 - `board_timer_now_ticks` / `board_timer_ticks_to_ns` (free-running counter)
 
-Any board that meets this contract can run the same cert components.
+For `silicon_device_manager` and the display/LVGL apps the board also needs
+DM adapters + `board_devices` registration for the exercised paths.
+
+Any board that meets the base contract can run the same cert components.
 
 ### `silicon_unit`
 
@@ -92,4 +120,10 @@ ELF path note: `dev.py` writes under `../build/ulipe-<arch>-<board>/ulmk`, not `
 # IPC ping/pong (own ROOT_THREAD)
 python3 tools/dev.py build --board boards/qemu_tc3xx \
   --no-components --component ping_pong
+
+# Display / touch / LVGL (needs board *_dm + board_devices)
+python3 tools/dev.py build --board ../ulmk_boards/esp32p4_ev_function \
+  --no-components --component display_hello
+python3 tools/dev.py build --board ../ulmk_boards/witte_linum \
+  --no-components --component lvgl_benchmark
 ```
