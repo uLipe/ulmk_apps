@@ -71,7 +71,7 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 		.priority = 10u,
 		.stack_size = LVGL_BENCH_STACK,
 		.privilege = ULMK_PRIV_DRIVER,
-		.heap_size = 0u,
+		.caps = ULMK_CAP_INHERIT,
 		.cpu = 0u,
 	};
 	tid = ulmk_thread_create(&attr);

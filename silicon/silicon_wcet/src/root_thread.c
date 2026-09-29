@@ -209,7 +209,7 @@ static void wrap_yield(void)
 }
 
 static ulmk_tid_t spawn_cpu(const char *name, void (*entry)(void *), void *arg,
-			    uint8_t prio, size_t stack, size_t heap, uint8_t cpu)
+			    uint8_t prio, size_t stack, uint32_t caps, uint8_t cpu)
 {
 	ulmk_thread_attr_t a = {0};
 
@@ -219,15 +219,15 @@ static ulmk_tid_t spawn_cpu(const char *name, void (*entry)(void *), void *arg,
 	a.priority   = prio;
 	a.stack_size = stack;
 	a.privilege  = ULMK_PRIV_DRIVER;
-	a.heap_size  = heap;
+	a.caps       = caps;
 	a.cpu        = cpu;
 	return ulmk_thread_create(&a);
 }
 
 static ulmk_tid_t spawn(const char *name, void (*entry)(void *), void *arg,
-			uint8_t prio, size_t stack, size_t heap)
+			uint8_t prio, size_t stack, uint32_t caps)
 {
-	return spawn_cpu(name, entry, arg, prio, stack, heap, 0u);
+	return spawn_cpu(name, entry, arg, prio, stack, caps, 0u);
 }
 
 /*
@@ -340,29 +340,12 @@ done:
 	ulmk_thread_exit();
 }
 
-static ULMK_PRIVATE uint32_t g_heap_ext[WCET_SAMPLES];
-static ULMK_PRIVATE volatile uint32_t g_heap_ext_n;
-
-static void heap_extend_one(void *arg)
-{
-	uint32_t idx = (uint32_t)(uintptr_t)arg;
-	uint32_t seq;
-	volatile struct ulmk_syscall_wcet_slot slot;
-
-	(void)ulmk_wcet_bind(&slot);
-	seq = slot.seq;
-	(void)ulmk_heap_extend(64u);
-	if (idx < WCET_SAMPLES)
-		g_heap_ext[idx] = slot_delta_after(&slot, seq);
-	g_heap_ext_n++;
-	ulmk_thread_exit();
-}
-
 static void heap_worker(void *arg)
 {
-	ulmk_heap_info_t hi;
-	uint32_t samples[WCET_SAMPLES];
+	uint32_t alloc[WCET_SAMPLES];
+	uint32_t release[WCET_SAMPLES];
 	uint32_t i, seq, mn, avg, mx;
+	void *p;
 
 	volatile struct ulmk_syscall_wcet_slot slot;
 
@@ -370,11 +353,22 @@ static void heap_worker(void *arg)
 	(void)ulmk_wcet_bind(&slot);
 	for (i = 0u; i < WCET_SAMPLES; i++) {
 		seq = slot.seq;
-		(void)ulmk_get_thread_heap(&hi);
-		samples[i] = slot_delta_after(&slot, seq);
+		p = ulmk_malloc(64u);
+		alloc[i] = slot_delta_after(&slot, seq);
+		if (!p) {
+			g_fail++;
+			break;
+		}
+		seq = slot.seq;
+		(void)ulmk_free(p);
+		release[i] = slot_delta_after(&slot, seq);
 	}
-	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
-	record("get_thread_heap", mn, avg, mx);
+	if (i == WCET_SAMPLES) {
+		stats_from_samples(alloc, WCET_SAMPLES, &mn, &avg, &mx);
+		record("malloc", mn, avg, mx);
+		stats_from_samples(release, WCET_SAMPLES, &mn, &avg, &mx);
+		record("free", mn, avg, mx);
+	}
 	ulmk_notif_signal(g_done, 0x1u);
 	ulmk_thread_exit();
 }
@@ -779,11 +773,6 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	record("mem_grant", mn, avg, mx);
 
 	board_console_puts("> irq\n");
-	/*
-	 * IRQ before heap_extend: each extend installs an MPU region; doing
-	 * many extends first has been observed to Class-4 on the subsequent
-	 * SRC write inside irq_bind on TC275.
-	 */
 	n = ulmk_notif_create();
 	/*
 	 * Soft irq_bind walks SRC_BASE+slot — one sample only on TC275.
@@ -831,9 +820,8 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);
 	record("irq_bind_hw", mn, avg, mx);
 	/*
-	 * Disarm SRC slots before tearing down the notif / growing MPU via
-	 * heap_extend — live STM0_SR1 bindings have Class-4'd the PASS
-	 * console put on TC275.
+	 * Disarm SRC slots before tearing down the notif — live STM0_SR1
+	 * bindings have Class-4'd the PASS console put on TC275.
 	 */
 	(void)ulmk_irq_disable(5u);
 	for (i = 0u; i < WCET_SAMPLES; i++)
@@ -849,24 +837,10 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 
 	board_console_puts("> heap\n");
 	g_done = ulmk_notif_create();
-	(void)spawn("wheap", heap_worker, NULL, 1u, 2048u, 2048u);
+	(void)spawn("wheap", heap_worker, NULL, 1u, 2048u, 0u);
 	ulmk_notif_wait(g_done, 0x1u, &bits);
 	ulmk_notif_destroy(g_done);
 
-	/*
-	 * One extend per fresh heap thread keeps region_count constant so the
-	 * O(1) check is not confounded by MPU region growth.
-	 */
-	g_heap_ext_n = 0u;
-	for (i = 0u; i < WCET_SAMPLES; i++)
-		(void)spawn("whext", heap_extend_one, (void *)(uintptr_t)i,
-			    1u, 1024u, 2048u);
-	(void)ulmk_thread_priority_set(self, 3u);
-	while (g_heap_ext_n < WCET_SAMPLES)
-		ulmk_thread_yield();
-	(void)ulmk_thread_priority_set(self, 0u);
-	stats_from_samples(g_heap_ext, WCET_SAMPLES, &mn, &avg, &mx);
-	record("heap_extend", mn, avg, mx);
 
 	ulmk_board_hil_mark(9u);
 

@@ -93,7 +93,7 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 		attr.priority   = 1u;
 		attr.stack_size = 2048u;
 		attr.privilege  = ULMK_PRIV_DRIVER;
-		attr.heap_size  = 0u;
+		attr.caps       = ULMK_CAP_INHERIT;
 		attr.cpu        = (uint8_t)cpu;
 		ulmk_board_hil_mark(0xC100u | cpu);
 

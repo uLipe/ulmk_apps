@@ -71,7 +71,7 @@ static ulmk_tid_t spawn(const char *name, void (*entry)(void *), uint8_t prio)
 	a.priority   = prio;
 	a.stack_size = 1024u;
 	a.privilege  = ULMK_PRIV_DRIVER;
-	a.heap_size  = 0u;
+	a.caps       = ULMK_CAP_INHERIT;
 	a.cpu = 0u;
 	return ulmk_thread_create(&a);
 }
