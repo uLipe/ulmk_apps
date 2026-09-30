@@ -27,11 +27,6 @@ void board_console_puts(const char *s);
 ulmk_tid_t pinmux_init(uint8_t cpu);
 void ulmk_board_hil_mark(uint32_t n);
 
-__attribute__((weak)) void ulmk_board_hil_mark(uint32_t n)
-{
-	(void)n;
-}
-
 #define IRQ_BIT_IDX	0u
 #define IRQ_MASK	(1u << IRQ_BIT_IDX)
 #define BIT_RDY		(1u << 1)

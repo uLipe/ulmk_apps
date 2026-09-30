@@ -8,7 +8,6 @@ void board_services_init(const ulmk_boot_info_t *info);
 void board_console_putc(char c);
 void board_console_puts(const char *s);
 void ulmk_board_hil_mark(uint32_t n);
-__attribute__((weak)) void ulmk_board_hil_mark(uint32_t n) { (void)n; }
 static void put_u32(uint32_t v) {
 	char buf[10]; int i = 0;
 	if (v == 0u) { board_console_putc('0'); return; }

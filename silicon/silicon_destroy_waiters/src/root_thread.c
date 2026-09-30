@@ -15,11 +15,6 @@ void board_console_putc(char c);
 void board_console_puts(const char *s);
 void ulmk_board_hil_mark(uint32_t n);
 
-__attribute__((weak)) void ulmk_board_hil_mark(uint32_t n)
-{
-	(void)n;
-}
-
 #define BIT_DONE	(1u << 0)
 
 static ULMK_PRIVATE int g_pass;
