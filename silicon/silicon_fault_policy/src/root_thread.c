@@ -55,7 +55,7 @@ static int sdk_map_ok(const void *p)
 
 static ulmk_tid_t sdk_spawn_priv(const char *name, void (*entry)(void *),
 				 void *arg, uint8_t prio, size_t stack,
-				 size_t heap, ulmk_privilege_t priv)
+				 uint32_t caps, ulmk_privilege_t priv)
 {
 	ulmk_thread_attr_t a = {0};
 
@@ -65,7 +65,7 @@ static ulmk_tid_t sdk_spawn_priv(const char *name, void (*entry)(void *),
 	a.priority   = prio;
 	a.stack_size = stack;
 	a.privilege  = priv;
-	a.heap_size  = heap;
+	a.caps       = caps;
 	a.cpu = 0u;
 	return ulmk_thread_create(&a);
 }

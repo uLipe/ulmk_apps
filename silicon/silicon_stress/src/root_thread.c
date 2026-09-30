@@ -117,7 +117,7 @@ static void stats_acc(uint32_t *mn, uint64_t *sum, uint32_t *mx, uint32_t sample
 }
 
 static ulmk_tid_t spawn(const char *name, void (*entry)(void *), void *arg,
-			uint8_t prio, size_t stack, size_t heap)
+			uint8_t prio, size_t stack, uint32_t caps)
 {
 	ulmk_thread_attr_t a = {0};
 
@@ -127,7 +127,7 @@ static ulmk_tid_t spawn(const char *name, void (*entry)(void *), void *arg,
 	a.priority   = prio;
 	a.stack_size = stack;
 	a.privilege  = ULMK_PRIV_DRIVER;
-	a.heap_size  = heap;
+	a.caps       = caps;
 	a.cpu = 0u;
 	return ulmk_thread_create(&a);
 }

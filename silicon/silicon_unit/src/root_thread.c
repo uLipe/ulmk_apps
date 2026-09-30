@@ -79,7 +79,7 @@ static int map_ok(const void *p)
 }
 
 static ulmk_tid_t spawn(const char *name, void (*entry)(void *), void *arg,
-			uint8_t prio, size_t heap)
+			uint8_t prio, uint32_t caps)
 {
 	ulmk_thread_attr_t a = {0};
 
@@ -89,7 +89,7 @@ static ulmk_tid_t spawn(const char *name, void (*entry)(void *), void *arg,
 	a.priority   = prio;
 	a.stack_size = 1024u;
 	a.privilege  = ULMK_PRIV_DRIVER;
-	a.heap_size  = heap;
+	a.caps       = caps;
 	a.cpu = 0u;
 	return ulmk_thread_create(&a);
 }
@@ -124,11 +124,17 @@ static void ipc_server(void *arg)
 
 static void heap_probe(void *arg)
 {
-	ulmk_heap_info_t hi;
+	volatile uint32_t *p;
 
 	(void)arg;
-	g_heap_ok = (ulmk_get_thread_heap(&hi) == ULMK_OK && hi.size > 0u);
-	g_heap_ext_ok = (ulmk_heap_extend(128u) == ULMK_OK);
+	p = (volatile uint32_t *)ulmk_malloc(128u);
+	if (p) {
+		p[0]  = 0x600dcafeu;
+		p[31] = 0x600dcafeu;
+		g_heap_ok = (p[0] == 0x600dcafeu && p[31] == 0x600dcafeu);
+		g_heap_ext_ok = (ulmk_free((void *)p) == ULMK_OK &&
+				 ulmk_free((void *)p) != ULMK_OK);
+	}
 	ulmk_notif_signal(g_done, 0x1u);
 	ulmk_thread_exit();
 }
@@ -353,32 +359,28 @@ static void test_heap_happy(void)
 	g_done = ulmk_notif_create();
 	g_heap_ok = 0;
 	g_heap_ext_ok = 0;
-	(void)spawn("heap", heap_probe, NULL, 1u, 512u);
+	(void)spawn("heap", heap_probe, NULL, 1u, 0u);
 	ulmk_notif_wait(g_done, 0x1u, &bits);
-	CHECK("get_heap", g_heap_ok);
-	CHECK("extend", g_heap_ext_ok);
+	CHECK("malloc", g_heap_ok);
+	CHECK("free", g_heap_ext_ok);
 	ulmk_notif_destroy(g_done);
 }
 
 static void test_heap_edge(void)
 {
-	ulmk_heap_info_t hi;
+	void *p;
 
 	progress("heap/edge");
-	/* Root typically has no heap — expect EPERM, not panic. */
-	CHECK("root_heap",
-	      ulmk_get_thread_heap(&hi) == ULMK_EPERM ||
-	      ulmk_get_thread_heap(&hi) == ULMK_OK);
-	CHECK("root_extend",
-	      ulmk_heap_extend(64u) == ULMK_EPERM ||
-	      ulmk_heap_extend(64u) == ULMK_OK ||
-	      ulmk_heap_extend(64u) == ULMK_ENOMEM);
+	p = ulmk_malloc(64u);
+	CHECK("root_malloc", p != NULL);
+	CHECK("root_free", p != NULL && ulmk_free(p) == ULMK_OK);
+	CHECK("free_bogus", ulmk_free((void *)&g_heap_ok) != ULMK_OK);
 }
 
 static void test_heap_crash(void)
 {
 	progress("heap/crash");
-	CHECK("extend0", ulmk_heap_extend(0u) != ULMK_OK);
+	CHECK("malloc0", ulmk_malloc(0u) == NULL);
 }
 
 /* ── irq ────────────────────────────────────────────────────────────────── */

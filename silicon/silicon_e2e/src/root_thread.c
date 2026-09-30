@@ -96,11 +96,17 @@ static void ipc_server(void *arg)
 
 static void heap_probe(void *arg)
 {
-	ulmk_heap_info_t hi;
+	volatile uint32_t *p;
 
 	(void)arg;
-	g_heap_ok = (ulmk_get_thread_heap(&hi) == ULMK_OK && hi.size > 0u);
-	g_heap_extend_ok = (ulmk_heap_extend(256) == ULMK_OK);
+	p = (volatile uint32_t *)ulmk_malloc(256u);
+	if (p) {
+		p[0]  = 0x600dcafeu;
+		p[63] = 0x600dcafeu;
+		g_heap_ok = (p[0] == 0x600dcafeu && p[63] == 0x600dcafeu);
+		g_heap_extend_ok = (ulmk_free((void *)p) == ULMK_OK &&
+				    ulmk_free((void *)p) != ULMK_OK);
+	}
 	ulmk_notif_signal(g_done, 0x1u);
 }
 
@@ -112,7 +118,7 @@ static void idle_target(void *arg)
 }
 
 static ulmk_tid_t spawn(const char *name, void (*entry)(void *), void *arg,
-			uint8_t prio, size_t heap)
+			uint8_t prio, uint32_t caps)
 {
 	ulmk_thread_attr_t a = {0};
 
@@ -122,7 +128,7 @@ static ulmk_tid_t spawn(const char *name, void (*entry)(void *), void *arg,
 	a.priority   = prio;
 	a.stack_size = 1024;
 	a.privilege  = ULMK_PRIV_DRIVER;
-	a.heap_size  = heap;
+	a.caps       = caps;
 	a.cpu = 0u;
 	return ulmk_thread_create(&a);
 }
@@ -237,11 +243,11 @@ static void test_heap(void)
 	uint32_t bits = 0u;
 
 	g_done = ulmk_notif_create();
-	spawn("heap", heap_probe, NULL, 1u, 512u);
+	spawn("heap", heap_probe, NULL, 1u, 0u);
 	ulmk_notif_wait(g_done, 0x1u, &bits);
 
-	CHECK("get_thread_heap", g_heap_ok);
-	CHECK("heap_extend", g_heap_extend_ok);
+	CHECK("malloc", g_heap_ok);
+	CHECK("free", g_heap_extend_ok);
 
 	ulmk_notif_destroy(g_done);
 }

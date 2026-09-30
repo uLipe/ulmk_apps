@@ -127,7 +127,7 @@ static ulmk_tid_t spawn(const char *name, void (*entry)(void *), void *arg,
 	a.priority   = prio;
 	a.stack_size = stack;
 	a.privilege  = ULMK_PRIV_DRIVER;
-	a.heap_size  = 0u;
+	a.caps       = ULMK_CAP_INHERIT;
 	a.cpu = 0u;
 	return ulmk_thread_create(&a);
 }
@@ -257,12 +257,7 @@ static void irq_consumer(void *arg)
 	int      ret;
 
 	if (!g_bound) {
-		/* Per-thread MPU: root's STM0 map does not cover this AS. */
-		if (map_stm0() != 0) {
-			g_count = -1;
-			ulmk_notif_signal(g_sync, BIT_FIN);
-			ulmk_thread_exit();
-		}
+		/* STM0 is reachable through the area inherited from root. */
 		ret = bind_enable();
 		if (ret != ULMK_OK) {
 			g_count = -1;
