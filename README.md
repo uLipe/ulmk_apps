@@ -4,6 +4,32 @@ External components consumed by [ulmk](https://github.com/uLipe/ulmk) via the
 sibling `../ulmk_apps` discovery path (`tools/dev.py` mounts it into the
 container as `/ulmk_apps`).
 
+## Philosophy
+
+Apps here are written against the kernel API and a small board contract, never
+against a specific board.  Any BSP that honours the contract runs them
+unchanged.
+
+![Apps architecture: apps reach the kernel through syscalls and the BSP through the board contract and the device manager](docs/diagrams/apps_architecture.png)
+
+- **One component, one `ROOT_THREAD`.**  Each app is a component that provides
+  `ulmk_root_thread()`; exactly one is enabled per ELF.
+- **The kernel is reached only through syscalls.**  Threads with inherited or
+  masked capabilities, IPC endpoints, notifications, and memory areas
+  (`ulmk_malloc`, grant, revoke).  The `freertos/` shim is a library over the
+  same calls: tasks become threads, queues and semaphores become notifications,
+  and delays become sleeps.
+- **The board is reached through two doors, both IPC.**  The first is the
+  board contract (`board_services_init`, `board_console_*`, `board_timer_*`),
+  which is enough for the cert suite and `ping_pong`.  The second is the
+  device manager for peripherals: an app includes only the
+  `ulmk_device_classes` headers, calls `ulmk_open("/dev/…")`, and talks to the
+  board's `*_dm` adapter.
+- **No board headers.**  Board-specific demos stay in
+  `ulmk_boards/<board>/components/`.
+
+The diagram source is `docs/diagrams/apps_architecture.drawio`.
+
 ## Layout
 
 ```
