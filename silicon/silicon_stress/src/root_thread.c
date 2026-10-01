@@ -492,6 +492,8 @@ static void print_report(void)
 	board_console_puts("SILICON_STRESS: REPORT\n");
 #if defined(ULMK_BOARD_HIL_TIMER_BASE) || defined(ULMK_ARCH_ARMV8M)
 	board_console_puts("arch=arm\n");
+#elif defined(__riscv)
+	board_console_puts("arch=riscv\n");
 #else
 	board_console_puts("arch=tricore isa=");
 	put_u32(ULMK_BOARD_TRICORE_ISA_MAJOR);
@@ -510,9 +512,11 @@ static void print_report(void)
 		   ptr_diff(_ulmk_user_ram_start, _ulmk_user_pool_end));
 	put_kv_u32("heap_pool_bytes",
 		   ptr_diff(_ulmk_user_pool_start, _ulmk_user_pool_end));
+#if defined(__TRICORE__) || defined(__tricore__)
 	/* Linker symbols only — boot_info lives in kernel RAM (not readable). */
 	put_kv_u32("csa_pool_bytes",
 		   ptr_diff(_ulmk_csa_pool_start, _ulmk_csa_pool_end));
+#endif
 
 	put_kv_u32("timer_sleep_ok", (uint32_t)g_timer_ok);
 	put_kv_u32("ctx_switch_ns_min", g_ctx_min_ns);

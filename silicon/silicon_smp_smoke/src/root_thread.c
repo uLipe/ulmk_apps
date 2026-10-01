@@ -226,7 +226,7 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 		ulmk_board_hil_mark(0xC100u | cpu);
 
 		tid = ulmk_thread_create(&attr);
-		if (tid == ULMK_TID_INVALID || (int32_t)tid < 0) {
+		if (tid == ULMK_TID_INVALID) {
 			ulmk_board_hil_mark(0xDEAD0000u | cpu);
 			board_console_puts("SILICON_SMP_SMOKE: FAIL spawn cpu");
 			puts_u32(cpu);

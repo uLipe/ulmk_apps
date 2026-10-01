@@ -48,6 +48,20 @@ void ulmk_board_hil_mark(uint32_t n);
 #endif
 #define WCET_FLOOR_TICKS	ULMK_BOARD_WCET_FLOOR_TICKS
 
+/*
+ * A line irq_bind_hw can take and that nothing else in the case uses.
+ * RISC-V PLIC bindings name the source as id << 2 (its priority word); the
+ * QEMU virt RTC line is idle there.  Not CLINT MSIP: disabling it at the
+ * end would also mask the IPI on SMP.
+ */
+#if defined(ULMK_BOARD_SRC_HIL_TIMER)
+#define WCET_BIND_HW_SRC	((uintptr_t)ULMK_BOARD_SRC_HIL_TIMER)
+#elif defined(ULMK_BOARD_TIMER_PLIC_IRQ)
+#define WCET_BIND_HW_SRC	((uintptr_t)ULMK_BOARD_TIMER_PLIC_IRQ << 2)
+#else
+#define WCET_BIND_HW_SRC	((uintptr_t)ULMK_BOARD_SRC_STM0_SR1)
+#endif
+
 static ULMK_PRIVATE int g_fail;
 static ULMK_PRIVATE ulmk_tid_t g_target;
 static ULMK_PRIVATE ulmk_ep_t g_ipc_ep;
@@ -808,13 +822,8 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	record("irq_disable", mn, avg, mx);
 	for (i = 0u; i < WCET_SAMPLES; i++) {
 		seq = slot.seq;
-#if defined(ULMK_BOARD_SRC_HIL_TIMER)
 		(void)ulmk_irq_bind_hw((uint8_t)(20u + i), n, 0u,
-				       (uintptr_t)ULMK_BOARD_SRC_HIL_TIMER);
-#else
-		(void)ulmk_irq_bind_hw((uint8_t)(20u + i), n, 0u,
-				       (uintptr_t)ULMK_BOARD_SRC_STM0_SR1);
-#endif
+				       WCET_BIND_HW_SRC);
 		samples[i] = slot_delta_after(&slot, seq);
 	}
 	stats_from_samples(samples, WCET_SAMPLES, &mn, &avg, &mx);

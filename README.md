@@ -140,6 +140,25 @@ bash ../ulmk_boards/tc275_lite/scripts/hil-silicon-unit.sh \
 
 ELF path note: `dev.py` writes under `../build/ulipe-<arch>-<board>/ulmk`, not `ulmk/build/`.
 
+### On QEMU (RISC-V virt)
+
+The same cases run on `qemu-system-riscv32` without a board, each built alone
+and judged by its `SILICON_<NAME>: PASS` / `FAIL` console line:
+
+```bash
+# from ulmk/ — PMP or Sv32 (--enable-mmu), UP or SMP (--enable-smp)
+python3 tools/dev.py tests silicon --board boards/qemu_riscv_virt
+python3 tools/dev.py tests silicon --board boards/qemu_riscv_virt --enable-smp --enable-mmu
+python3 tools/dev.py tests silicon --board boards/qemu_riscv_virt_smp4 \
+  --enable-smp --case silicon_smp_smoke
+```
+
+The virt BSP backs the board contract with CLINT `mtime` timestamps, and
+`silicon_irq_stress` fires CLINT MSIP as its software-triggerable line.
+Exceptions: `silicon_device_manager` is skipped (no DM adapters on virt), and
+`silicon_wcet` runs under `-icount` and single-hart only, since QEMU's cycle
+counter is shared by all harts.
+
 ## Standalone demos
 
 ```bash

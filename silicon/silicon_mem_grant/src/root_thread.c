@@ -22,11 +22,6 @@ void board_console_putc(char c);
 void board_console_puts(const char *s);
 void ulmk_board_hil_mark(uint32_t n);
 
-__attribute__((weak)) void ulmk_board_hil_mark(uint32_t n)
-{
-	(void)n;
-}
-
 static ULMK_PRIVATE int g_pass;
 static ULMK_PRIVATE int g_fail;
 static ULMK_PRIVATE ulmk_notif_t g_done;

@@ -13,6 +13,10 @@
  * SRPN would never wake the consumer.  Stealing SR0 for SRPN 10 suspends the
  * kernel tick for the duration of this one-shot HIL — do not start
  * board_timer / ulmk_tick_start from this app.
+ *
+ * RISC-V (QEMU virt): hart 0 CLINT MSIP, raised and cleared from U-mode
+ * through the PERIPH window.  It is not the tick line, so the full board
+ * bring-up runs and the tick keeps going.
  */
 
 #include <stdint.h>
@@ -22,15 +26,11 @@
 #include <board_config.h>
 
 ulmk_tid_t board_console_start(const ulmk_boot_info_t *info);
+void board_services_init(const ulmk_boot_info_t *info);
 void board_console_putc(char c);
 void board_console_puts(const char *s);
 ulmk_tid_t pinmux_init(uint8_t cpu);
 void ulmk_board_hil_mark(uint32_t n);
-
-__attribute__((weak)) void ulmk_board_hil_mark(uint32_t n)
-{
-	(void)n;
-}
 
 #define IRQ_BIT_IDX	0u
 #define IRQ_MASK	(1u << IRQ_BIT_IDX)
@@ -57,6 +57,11 @@ __attribute__((weak)) void ulmk_board_hil_mark(uint32_t n)
 #define TIM_SR_UIF	(1u << 0)
 #define TIM_EGR_UG	(1u << 0)
 #define TIM_DELTA	4800u	/* ~40 µs @ 120 MHz APB1*2 timer clk */
+#elif defined(ULMK_BOARD_CLINT_BASE) && (ULMK_BOARD_CLINT_BASE != 0u)
+#define IRQ_STRESS_CLINT	1
+#define UL_IRQ_SRPN	10u
+#define UL_IRQ_SRC	((uintptr_t)ULMK_BOARD_CLINT_BASE)
+#define CLINT_MAP_SIZE	0x1000u
 #else
 #define UL_IRQ_SRPN	10u	/* must != ULMK_BOARD_IRQ_TICK (see file header) */
 #define UL_IRQ_SRC	((uintptr_t)ULMK_BOARD_SRC_STM0_SR0)
@@ -176,6 +181,31 @@ static int map_stm0(void)
 	g_stm0[tim_off(TIM_SR)]   = ~TIM_SR_UIF;
 	return 0;
 }
+#elif defined(IRQ_STRESS_CLINT)
+static void irq_trigger(void)
+{
+	g_stm0[0] = 1u;
+}
+
+static void irq_clear(void)
+{
+	g_stm0[0] = 0u;
+	(void)ulmk_irq_ack(UL_IRQ_SRPN);
+}
+
+static int map_stm0(void)
+{
+	void *p;
+
+	p = ulmk_mem_map((void *)(uintptr_t)ULMK_BOARD_CLINT_BASE,
+			 CLINT_MAP_SIZE, ULMK_PERM_READ | ULMK_PERM_WRITE,
+			 ULMK_MMAP_PERIPH);
+	if (!p)
+		return -1;
+	g_stm0 = (volatile uint32_t *)p;
+	g_stm0[0] = 0u;
+	return 0;
+}
 #else
 static inline uint32_t stm0_off(uint32_t reg)
 {
@@ -237,6 +267,8 @@ static int bind_enable(void)
 	g_stm0[tim_off(TIM_CR1)]  = 0u;
 	g_stm0[tim_off(TIM_DIER)] = 0u;
 	g_stm0[tim_off(TIM_SR)]   = ~TIM_SR_UIF;
+#elif defined(IRQ_STRESS_CLINT)
+	g_stm0[0] = 0u;
 #else
 	/*
 	 * Quiesce the arch tick compare: with SRPN stolen, a live CMP0EN
@@ -421,11 +453,16 @@ void ulmk_root_thread(const ulmk_boot_info_t *info)
 	ulmk_tid_t tid;
 
 	ulmk_board_hil_mark(1u);
+#if defined(IRQ_STRESS_CLINT)
+	(void)tid;
+	board_services_init(info);
+#else
 	/* Console only — board_timer would own STM0 CMP0/SR0. */
 	tid = pinmux_init(0u);
 	if (tid == ULMK_TID_INVALID)
 		ulmk_board_hil_mark(0x70u);
 	(void)board_console_start(info);
+#endif
 	ulmk_board_hil_mark(3u);
 	board_console_puts("SILICON_IRQ_STRESS: begin\n");
 	g_pass  = 0;

@@ -14,11 +14,6 @@ void board_console_putc(char c);
 void board_console_puts(const char *s);
 void ulmk_board_hil_mark(uint32_t n);
 
-__attribute__((weak)) void ulmk_board_hil_mark(uint32_t n)
-{
-	(void)n;
-}
-
 #define PRIO_SERVER		100u
 #define PRIO_CLIENT		10u
 #define BIT_GO			(1u << 0)
